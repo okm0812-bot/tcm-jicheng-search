@@ -55,9 +55,7 @@ async function fetchJSON(path){
 
 // ===== Init =====
 async function init(){
-  console.log('[DEBUG] init() started');
   try{
-  console.log('[DEBUG] fetching books-index.json and disease-map.json');
     const [booksIndex, diseaseMap] = await Promise.all([
       fetchJSON(`${DATA_BASE}/books-index.json`),
       fetchJSON(`${DATA_BASE}/disease-map.json`),
@@ -70,13 +68,10 @@ async function init(){
     el.corpusStats.textContent = `收錄 ${booksIndex.length} 部典籍・約 ${(totalChars/10000).toFixed(0)} 萬字`;
     el.bookCountLanding.textContent = booksIndex.length;
 
-    console.log('[DEBUG] data loaded. books:', booksIndex.length, 'diseases:', diseaseMap.length);
-  renderCategoryLists();
-  console.log('[DEBUG] init() completed successfully');
+    renderCategoryLists();
   }catch(err){
-    console.error('[DEBUG] init() ERROR:', err);
-    el.corpusStats.textContent = '資料載入失敗: ' + err.message;
-    document.body.setAttribute('data-debug-error', err.message);
+    console.error(err);
+    el.corpusStats.textContent = '資料載入失敗，請確認 data/ 目錄是否存在';
   }
 }
 
@@ -445,5 +440,4 @@ function highlightText(text, terms){
 }
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-console.log('[DEBUG] script loaded, calling init()');
-init().then(()=>console.log('[DEBUG] init promise resolved')).catch(e=>console.error('[DEBUG] init promise rejected:', e));
+init();
