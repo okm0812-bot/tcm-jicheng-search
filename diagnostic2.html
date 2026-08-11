@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>岐黃尋 簡診斷</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #f5f0e8; }
+  h1 { color: #2d3f52; }
+  .item { padding: 8px 12px; margin: 4px 0; border-radius: 4px; }
+  .pass { background: #d4edda; color: #155724; }
+  .fail { background: #f8d7da; color: #721c24; font-weight: bold; }
+  .info { background: #d1ecf1; color: #0c5460; }
+  h3 { margin-top: 24px; color: #555; }
+</style>
+</head>
+<body>
+<h1>🔍 岐黃尋 簡單診斷</h1>
+<p>此頁面馬上顯示結果（不需等待網路）</p>
+<h3>HTML 元素檢查</h3>
+<div id="results"></div>
+<h3>URL 與時間</h3>
+<script>
+(function(){
+  var results = document.getElementById('results');
+  function add(label, status, detail) {
+    var d = document.createElement('div');
+    d.className = 'item ' + status;
+    d.innerHTML = (status === 'pass' ? '✅' : status === 'fail' ? '❌' : 'ℹ️') + ' <b>' + label + '</b>' + (detail ? ': ' + detail : '');
+    results.appendChild(d);
+  }
+  // HTML elements
+  add('corpusStats', document.getElementById('corpusStats') ? 'pass' : 'fail', document.getElementById('corpusStats') ? 'found, text=' + document.getElementById('corpusStats').textContent : 'MISSING');
+  add('landingArea', document.getElementById('landingArea') ? 'pass' : 'fail');
+  add('landingCategoryList', document.getElementById('landingCategoryList') ? 'pass' : 'fail');
+  add('bookCountLanding', document.getElementById('bookCountLanding') ? 'pass' : 'fail', document.getElementById('bookCountLanding') ? 'text=' + document.getElementById('bookCountLanding').textContent : 'MISSING');
+  add('searchInput', document.getElementById('searchInput') ? 'pass' : 'fail');
+  add('readerOverlay', document.getElementById('readerOverlay') ? 'pass' : 'fail', document.getElementById('readerOverlay') ? 'hidden=' + document.getElementById('readerOverlay').hidden : 'MISSING');
+  add('loadingToast', document.getElementById('loadingToast') ? 'pass' : 'fail', document.getElementById('loadingToast') ? 'hidden=' + document.getElementById('loadingToast').hidden : 'MISSING');
+  // CSS computed
+  var lo = document.getElementById('loadingToast');
+  if(lo) {
+    var cs = window.getComputedStyle(lo);
+    add('loadingToast display', cs.display === 'none' ? 'pass' : 'fail', 'display=' + cs.display);
+  }
+  // Page URL
+  add('Page URL', 'info', location.href);
+  add('User Agent', 'info', navigator.userAgent.split(' ').slice(-3).join(' '));
+  // Test set textContent
+  var cs2 = document.getElementById('corpusStats');
+  if(cs2) { cs2.textContent = '診斷完成 ' + new Date().toLocaleTimeString(); add('set corpusStats textContent', 'pass'); }
+})();
+</script>
+<p style="margin-top:30px;color:#888;">請截圖並回傳給開發者</p>
+</body>
+</html>
