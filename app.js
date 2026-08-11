@@ -82,6 +82,7 @@ async function init(){
 
     renderCategoryLists();
     console.log('[DEBUG] renderCategoryLists done');
+    hideLoading();  // FIX: hide toast after init completes successfully
   }catch(err){
     console.error('[DEBUG] init() ERROR:', err);
     hideLoading();
@@ -468,5 +469,5 @@ setTimeout(function(){
     console.warn('Auto-hiding stuck loading toast');
     t.hidden = true;
   }
-}, 5000);
+}, 15000);  // 15s safety timeout
 init();
