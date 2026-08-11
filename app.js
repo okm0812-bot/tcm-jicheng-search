@@ -71,6 +71,7 @@ async function init(){
     renderCategoryLists();
   }catch(err){
     console.error(err);
+    hideLoading();
     el.corpusStats.textContent = '資料載入失敗，請確認 data/ 目錄是否存在';
   }
 }
@@ -440,4 +441,12 @@ function highlightText(text, terms){
 }
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+// Safety: auto-hide loading toast after 5 seconds
+setTimeout(function(){
+  var t = document.getElementById('loadingToast');
+  if(t && !t.hidden) {
+    console.warn('Auto-hiding stuck loading toast');
+    t.hidden = true;
+  }
+}, 5000);
 init();
