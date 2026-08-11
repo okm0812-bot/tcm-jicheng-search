@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>岐黃尋・中醫典籍病名檢索</title>
+<meta name="description" content="中醫典籍全文檢索，古今病名智慧對照">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="seal-mark" aria-hidden="true">岐黃尋</div>
+
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <div class="brand-seal">尋</div>
+      <div class="brand-text">
+        <h1>岐黃尋</h1>
+        <p class="tagline">中醫典籍病名檢索・古今對照</p>
+      </div>
+    </div>
+    <div class="stats" id="corpusStats" aria-live="polite"></div>
+  </div>
+</header>
+
+<main>
+  <section class="search-hero">
+    <div class="search-hero-inner">
+      <label for="searchInput" class="search-label">輸入病名，古今皆可</label>
+      <div class="search-box">
+        <input
+          type="text"
+          id="searchInput"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="例如：消渴、糖尿病、傷寒、痛風…"
+        >
+        <div class="search-icon" aria-hidden="true">尋</div>
+        <ul id="autocompleteList" class="autocomplete-list" hidden></ul>
+      </div>
+      <p class="search-hint">輸入現代病名，系統會提示對應的古代病名；輸入古代病名，也會標明其可能對應的現代病名。</p>
+    </div>
+  </section>
+
+  <section id="resultsArea" class="results-area" hidden>
+
+    <div id="mappingCard" class="mapping-card" hidden></div>
+
+    <div class="results-columns">
+      <div class="results-main">
+        <div class="results-header">
+          <h2 id="resultsTitle">相關典籍</h2>
+          <span id="resultsCount" class="results-count"></span>
+        </div>
+        <ul id="bookResultsList" class="book-results-list"></ul>
+        <p id="noResults" class="no-results" hidden>目前資料庫中沒有直接找到相關典籍段落，可嘗試輸入其他同義詞，或直接瀏覽下方典籍分類。</p>
+      </div>
+
+      <aside class="results-side">
+        <h3>依分類瀏覽</h3>
+        <ul id="categoryList" class="category-list"></ul>
+      </aside>
+    </div>
+  </section>
+
+  <section id="landingArea" class="landing-area">
+    <div class="landing-inner">
+      <h2>關於這個工具</h2>
+      <p>本站收錄歷代中醫典籍共 <strong id="bookCountLanding">—</strong> 部，來源整理自「中醫笈成」開放資料。輸入病名後，系統會先比對古今病名對照表，再於全文索引中尋找相關典籍段落，協助快速定位古籍中的相關論述。</p>
+      <p class="disclaimer">古今病名對照僅供臨床參考與文獻檢索輔助，中醫辨證與現代西醫診斷概念未必一一對應，仍請以個別典籍原文與專業判斷為準。</p>
+      <div class="landing-categories">
+        <h3>常見分類</h3>
+        <ul id="landingCategoryList" class="landing-category-list"></ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>資料來源：中醫笈成（jicheng.tw）公開典籍資料 ・ 本工具為靜態網頁，不儲存任何使用者查詢紀錄</p>
+</footer>
+
+<!-- Reader panel -->
+<div id="readerOverlay" class="reader-overlay" hidden>
+  <div class="reader-panel" role="dialog" aria-modal="true" aria-labelledby="readerTitle">
+    <div class="reader-header">
+      <div class="reader-header-text">
+        <h2 id="readerTitle"></h2>
+        <p id="readerMeta" class="reader-meta"></p>
+      </div>
+      <div class="reader-controls">
+        <div id="matchNav" class="match-nav" hidden>
+          <button id="matchPrev" aria-label="上一個符合處">◀</button>
+          <span id="matchCounter">0 / 0</span>
+          <button id="matchNext" aria-label="下一個符合處">▶</button>
+        </div>
+        <button id="readerClose" class="reader-close" aria-label="關閉">✕</button>
+      </div>
+    </div>
+    <div class="reader-body">
+      <nav id="chapterNav" class="chapter-nav"></nav>
+      <article id="chapterContent" class="chapter-content"></article>
+    </div>
+  </div>
+</div>
+
+<div id="loadingToast" class="loading-toast" hidden>載入中…</div>
+
+<script src="app.js"></script>
+</body>
+</html>
