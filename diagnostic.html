@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>岐黃尋 診斷</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #ece7d9; }
+  h1 { color: #2d3f52; }
+  .pass { color: green; }
+  .fail { color: red; font-weight: bold; }
+  .warn { color: #a8863f; }
+  pre { background: #333; color: #0f0; padding: 12px; border-radius: 6px; max-height: 200px; overflow-y: auto; }
+  .step { margin: 12px 0; padding: 10px; border-left: 4px solid #2d3f52; }
+  .step.pass { border-left-color: green; }
+  .step.fail { border-left-color: red; }
+</style>
+</head>
+<body>
+<h1>🔍 岐黃尋 診斷頁面</h1>
+<div id="results"></div>
+<script>
+const results = document.getElementById('results');
+function add(title, status, detail) {
+  const d = document.createElement('div');
+  d.className = 'step ' + (status === 'pass' ? 'pass' : status === 'fail' ? 'fail' : 'warn');
+  d.innerHTML = `<b>${status === 'pass' ? '✅' : status === 'fail' ? '❌' : '⚠️'} ${title}</b>` + (detail ? `<pre>${detail}</pre>` : '');
+  results.appendChild(d);
+}
+async function run() {
+  // 1. index.html
+  try {
+    const r = await fetch('./index.html');
+    add('index.html', 'pass', `HTTP ${r.status} Content-Length: ${r.headers.get('content-length')}`);
+  } catch(e) { add('index.html', 'fail', e.message); }
+
+  // 2. style.css
+  try {
+    const r = await fetch('./style.css');
+    add('style.css', 'pass', `HTTP ${r.status} Content-Length: ${r.headers.get('content-length')}`);
+  } catch(e) { add('style.css', 'fail', e.message); }
+
+  // 3. app.js
+  try {
+    const r = await fetch('./app.js');
+    add('app.js', 'pass', `HTTP ${r.status} Content-Length: ${r.headers.get('content-length')}`);
+  } catch(e) { add('app.js', 'fail', e.message); }
+
+  // 4. books-index.json
+  try {
+    const t0 = Date.now();
+    const r = await fetch('./data/books-index.json');
+    const ms = Date.now() - t0;
+    const ct = r.headers.get('content-type');
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch(e) { throw new Error('JSON parse error: ' + e.message + ' | First 100 chars: ' + text.slice(0,100)); }
+    add('data/books-index.json', 'pass', `HTTP ${r.status} ${ms}ms | Content-Type: ${ct} | Items: ${data.length} | First: ${JSON.stringify(data[0]).slice(0,80)}`);
+  } catch(e) { add('data/books-index.json', 'fail', e.message); }
+
+  // 5. disease-map.json
+  try {
+    const r = await fetch('./data/disease-map.json');
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch(e) { throw new Error('JSON parse error: ' + e.message); }
+    add('data/disease-map.json', 'pass', `HTTP ${r.status} | Items: ${data.length}`);
+  } catch(e) { add('data/disease-map.json', 'fail', e.message); }
+
+  // 6. DOM elements check
+  const ids = ['landingArea','categoryList','landingCategoryList','bookCountLanding','corpusStats','searchInput','readerOverlay','loadingToast'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    add(`DOM: #${id}`, el ? 'pass' : 'fail', el ? `found, hidden=${el.hidden}` : 'NOT FOUND - this is the bug!');
+  });
+
+  // 7. el.corpusStats test
+  const elCorpusStats = document.getElementById('corpusStats');
+  if (elCorpusStats) {
+    elCorpusStats.textContent = 'DIAGNOSTIC OK at ' + new Date().toLocaleTimeString();
+    add('el.corpusStats writeable', 'pass', 'Successfully set textContent');
+  }
+
+  add('完成', 'warn', '請截圖此頁面回傳給開發者');
+}
+run();
+</script>
+</body>
+</html>
