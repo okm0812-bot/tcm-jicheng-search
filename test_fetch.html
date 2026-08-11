@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Test</title></head>
+<body>
+<h1 id="status">Loading...</h1>
+<pre id="log"></pre>
+<script>
+const log = document.getElementById('log');
+const status = document.getElementById('status');
+function info(msg) {
+  log.textContent += msg + '\n';
+  console.log(msg);
+}
+async function test() {
+  try {
+    info('Testing fetch...');
+    const r = await fetch('data/books-index.json');
+    info('Status: ' + r.status);
+    info('Content-Type: ' + r.headers.get('content-type'));
+    const data = await r.json();
+    info('JSON OK, items: ' + data.length);
+    status.textContent = 'OK: ' + data.length + ' books';
+    status.style.color = 'green';
+  } catch(e) {
+    info('ERROR: ' + e.message);
+    status.textContent = 'FAILED: ' + e.message;
+    status.style.color = 'red';
+  }
+}
+test();
+</script>
+</body></html>
