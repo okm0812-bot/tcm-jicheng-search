@@ -49,7 +49,14 @@ function hideLoading(){ el.loadingToast.hidden = true; }
 
 async function fetchJSON(path){
   const res = await fetch(path);
-  if(!res.ok) throw new Error('無法載入 ' + path);
+  if(!res.ok){
+    const errMsg = `無法載入 ${path} (HTTP ${res.status})`;
+    console.error(errMsg);
+    // 顯示錯誤在 corpusStats
+    const el2 = document.getElementById('corpusStats');
+    if(el2) el2.textContent = errMsg;
+    throw new Error(errMsg);
+  }
   return res.json();
 }
 
@@ -78,8 +85,14 @@ async function init(){
   }catch(err){
     console.error('[DEBUG] init() ERROR:', err);
     hideLoading();
-    el.corpusStats.textContent = '資料載入失敗: ' + err.message;
+    const msg = '資料載入失敗: ' + err.message;
+    el.corpusStats.textContent = msg;
     el.corpusStats.style.color = 'red';
+    // 也在 landing 區顯示錯誤
+    const landing = document.getElementById('landingArea');
+    if(landing){
+      landing.innerHTML = '<div style="padding:40px;color:red;font-size:1.1rem;">' + msg + '<br><br><button onclick="location.reload()">重新整理</button></div>';
+    }
   }
 }
 
