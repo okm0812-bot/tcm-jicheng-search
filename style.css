@@ -2,6 +2,8 @@
    Palette drawn from the scholar's studio: ink, aged rice paper,
    seal-stamp vermillion, herbal jade, brass fittings.
 */
+[hidden]{display:none !important;}
+
 :root{
   --paper: #ece7d9;
   --paper-deep: #e0dac7;
