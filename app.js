@@ -177,8 +177,8 @@ async function getBookContent(bookId){
   return data;
 }
 
-const MAX_CANDIDATE_BOOKS = 80; // 候選典籍上限，避免極常見關鍵字造成過多下載
-const FETCH_CONCURRENCY = 12;   // 候選典籍平行下載數，加速驗證階段
+const MAX_CANDIDATE_BOOKS = 60;  // 候選典籍上限，避免極常見關鍵字造成過多下載
+const FETCH_CONCURRENCY = 15;    // 候選典籍平行下載數，加速驗證階段
 
 // 以固定併發數平行處理陣列，避免一次發出過多請求
 async function mapWithConcurrency(items, limit, asyncFn){
@@ -356,14 +356,21 @@ async function runSearch(rawQuery){
   showLoading('搜尋典籍全文中…');
 
   const bookScores = new Map(); // bookIndex -> {count, terms:Set}
-  for(const term of searchTerms){
-    const hits = await fullTextSearchTerm(term);
-    hits.forEach((rec, idx)=>{
-      const cur = bookScores.get(idx) || {count:0, terms:new Set()};
-      cur.count += rec.count;
-      rec.rawMatches.forEach(t => cur.terms.add(t));
-      bookScores.set(idx, cur);
+  try{
+    // 多個搜尋詞（原始輸入 + 古今病名對照延伸詞）平行處理，避免依序等待造成長時間卡住
+    const allHits = await Promise.all([...searchTerms].map(term => fullTextSearchTerm(term)));
+    allHits.forEach(hits=>{
+      hits.forEach((rec, idx)=>{
+        const cur = bookScores.get(idx) || {count:0, terms:new Set()};
+        cur.count += rec.count;
+        rec.rawMatches.forEach(t => cur.terms.add(t));
+        bookScores.set(idx, cur);
+      });
     });
+  }catch(err){
+    console.error('全文搜尋發生錯誤：', err);
+  }finally{
+    hideLoading();
   }
 
   // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
@@ -374,8 +381,6 @@ async function runSearch(rawQuery){
       bookScores.set(idx, {count:0, terms:new Set(['(書名相符)'])});
     }
   });
-
-  hideLoading();
 
   const bookResults = [...bookScores.entries()]
     .map(([idx, rec])=>({book: state.booksIndex[idx], count: rec.count, terms:[...rec.terms]}))
