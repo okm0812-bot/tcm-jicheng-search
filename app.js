@@ -7,8 +7,9 @@ const state = {
   booksIndex: null,       // array from books-index.json
   booksById: new Map(),
   diseaseMap: null,       // array from disease-map.json
-  termIndex: null,        // lazy-loaded object: term -> [[bookId,count],...]
-  termIndexLoading: null,
+  charNormalizeMap: null, // 簡體/異體字 -> 正規化字 對照表
+  shardCache: new Map(),  // 雙字元索引分片快取: hexCodePoint -> {bigram:[bookIdx,...]}
+  bookContentCache: new Map(), // bookId -> parsed book json (chapters etc.)
   currentQuery: '',
   currentMatches: [],     // indices of <mark> in reader for nav
   currentMatchPos: 0,
@@ -70,9 +71,13 @@ async function init(){
     console.log('[DEBUG] fetching disease-map.json...');
     const diseaseMap = await fetchJSON(`${DATA_BASE}/disease-map.json`);
     console.log('[DEBUG] disease-map loaded:', diseaseMap.length, 'entries');
+    console.log('[DEBUG] fetching char-normalize-map.json...');
+    const charNormalizeMap = await fetchJSON(`${DATA_BASE}/char-normalize-map.json`);
+    console.log('[DEBUG] char-normalize-map loaded:', Object.keys(charNormalizeMap).length, 'entries');
 
     state.booksIndex = booksIndex;
     state.diseaseMap = diseaseMap;
+    state.charNormalizeMap = charNormalizeMap;
     booksIndex.forEach(b => state.booksById.set(b.id, b));
 
     const totalChars = booksIndex.reduce((s,b)=>s+b.charCount,0);
@@ -134,15 +139,121 @@ function browseCategory(cat){
   });
 }
 
-// ===== Term index (lazy) =====
-function loadTermIndex(){
-  if(state.termIndex) return Promise.resolve(state.termIndex);
-  if(state.termIndexLoading) return state.termIndexLoading;
-  showLoading('載入全文索引…');
-  state.termIndexLoading = fetchJSON(`${DATA_BASE}/term-index.json`)
-    .then(data=>{ state.termIndex = data; hideLoading(); return data; })
-    .catch(err=>{ hideLoading(); console.error(err); return {}; });
-  return state.termIndexLoading;
+// ===== 全文檢索引擎 =====
+// 原理：把查詢字串正規化（簡體轉繁體 + 中醫常見異體字統一），
+// 拆成連續雙字元（bigram），用預先建立好的分片索引找出「可能包含」
+// 這個字串的候選典籍，再實際抓取候選典籍全文逐一驗證比對，
+// 找出真正出現的段落並標記命中次數。
+
+function normalizeText(text){
+  const map = state.charNormalizeMap || {};
+  let out = '';
+  for(const ch of text){
+    out += map[ch] || ch;
+  }
+  return out;
+}
+
+// 依字元取得雙字元索引分片（有快取，找不到回傳空物件而不是報錯）
+async function getShard(ch){
+  const hex = ch.codePointAt(0).toString(16);
+  if(state.shardCache.has(hex)) return state.shardCache.get(hex);
+  let data;
+  try{
+    const res = await fetch(`${DATA_BASE}/bigram-shards/${hex}.json`);
+    data = res.ok ? await res.json() : {};
+  }catch(err){
+    data = {};
+  }
+  state.shardCache.set(hex, data);
+  return data;
+}
+
+// 取得典籍全文內容（有快取，供搜尋驗證與閱讀器共用，避免重複下載）
+async function getBookContent(bookId){
+  if(state.bookContentCache.has(bookId)) return state.bookContentCache.get(bookId);
+  const data = await fetchJSON(`${DATA_BASE}/books/${encodeURIComponent(bookId)}.json`);
+  state.bookContentCache.set(bookId, data);
+  return data;
+}
+
+const MAX_CANDIDATE_BOOKS = 80; // 候選典籍上限，避免極常見關鍵字造成過多下載
+const FETCH_CONCURRENCY = 12;   // 候選典籍平行下載數，加速驗證階段
+
+// 以固定併發數平行處理陣列，避免一次發出過多請求
+async function mapWithConcurrency(items, limit, asyncFn){
+  const results = [];
+  let i = 0;
+  async function worker(){
+    while(i < items.length){
+      const idx = i++;
+      results[idx] = await asyncFn(items[idx], idx);
+    }
+  }
+  const workers = Array.from({length: Math.min(limit, items.length)}, worker);
+  await Promise.all(workers);
+  return results;
+}
+
+// 對單一關鍵字做全文檢索，回傳 Map(bookIndex -> {count, rawMatches:Set})
+async function fullTextSearchTerm(term){
+  const q = normalizeText(term.trim());
+  const result = new Map();
+  if(!q) return result;
+
+  let candidateIndices;
+
+  if(q.length === 1){
+    // 單字查詢：用「以此字開頭的所有雙字元」聯集，近似代表「典籍含有此字」
+    const shard = await getShard(q[0]);
+    const set = new Set();
+    Object.values(shard).forEach(arr => arr.forEach(i => set.add(i)));
+    candidateIndices = [...set];
+  } else {
+    // 多字查詢：拆成連續雙字元，逐一取交集
+    let candidateSet = null;
+    for(let i = 0; i < q.length - 1; i++){
+      const bigram = q.slice(i, i+2);
+      const shard = await getShard(bigram[0]);
+      const bookList = shard[bigram] || [];
+      const bookSet = new Set(bookList);
+      if(candidateSet === null){
+        candidateSet = bookSet;
+      } else {
+        candidateSet = new Set([...candidateSet].filter(x => bookSet.has(x)));
+      }
+      if(candidateSet.size === 0) break; // 提早結束：不可能有結果
+    }
+    candidateIndices = candidateSet ? [...candidateSet] : [];
+  }
+
+  if(candidateIndices.length > MAX_CANDIDATE_BOOKS){
+    candidateIndices = candidateIndices.slice(0, MAX_CANDIDATE_BOOKS);
+  }
+
+  // 平行抓取候選典籍全文，實際驗證比對位置與次數
+  await mapWithConcurrency(candidateIndices, FETCH_CONCURRENCY, async (idx)=>{
+    const bookMeta = state.booksIndex[idx];
+    if(!bookMeta) return;
+    let data;
+    try{
+      data = await getBookContent(bookMeta.id);
+    }catch(err){ return; }
+    const fullText = data.chapters.map(ch => ch.content || '').join('');
+    const normFull = normalizeText(fullText);
+
+    let count = 0;
+    const rawMatches = new Set();
+    let pos = normFull.indexOf(q);
+    while(pos !== -1){
+      count++;
+      rawMatches.add(fullText.slice(pos, pos + q.length));
+      pos = normFull.indexOf(q, pos + 1);
+    }
+    if(count > 0) result.set(idx, {count, rawMatches, book: bookMeta});
+  });
+
+  return result;
 }
 
 // ===== Autocomplete =====
@@ -232,54 +343,42 @@ async function runSearch(rawQuery){
   if(!q) return;
   state.currentQuery = q;
 
-  // 1. disease-map lookup
+  // 1. disease-map lookup（病名古今對照，僅供顯示與延伸搜尋詞用）
   const mappingMatches = state.diseaseMap.filter(entry =>
     entry.modern.includes(q) || entry.ancient.some(a => a.includes(q) || q.includes(a))
   );
 
-  // 2. gather candidate search terms (the raw query + any ancient terms from mapping)
+  // 2. gather candidate search terms：原始查詢 + 病名對照表中的古代病名
+  //    （病名、藥名、方劑名、任意關鍵字都走同一套全文檢索邏輯）
   const searchTerms = new Set([q]);
   mappingMatches.forEach(m => m.ancient.forEach(a => searchTerms.add(a)));
 
-  showLoading('搜尋典籍中…');
-  const termIndex = await loadTermIndex();
-  hideLoading();
+  showLoading('搜尋典籍全文中…');
 
-  const bookScores = new Map(); // bookId -> {count, matchedTerms:Set}
-  searchTerms.forEach(term=>{
-    // exact match
-    if(termIndex[term]){
-      termIndex[term].forEach(([bookId,count])=>{
-        const rec = bookScores.get(bookId) || {count:0, terms:new Set()};
-        rec.count += count;
-        rec.terms.add(term);
-        bookScores.set(bookId, rec);
-      });
-    }
-  });
-
-  // fallback: substring match across term-index keys if nothing found and query length>=2
-  if(bookScores.size === 0 && q.length >= 2){
-    const keys = Object.keys(termIndex).filter(k => k.includes(q)).slice(0, 30);
-    keys.forEach(term=>{
-      termIndex[term].forEach(([bookId,count])=>{
-        const rec = bookScores.get(bookId) || {count:0, terms:new Set()};
-        rec.count += count;
-        rec.terms.add(term);
-        bookScores.set(bookId, rec);
-      });
+  const bookScores = new Map(); // bookIndex -> {count, terms:Set}
+  for(const term of searchTerms){
+    const hits = await fullTextSearchTerm(term);
+    hits.forEach((rec, idx)=>{
+      const cur = bookScores.get(idx) || {count:0, terms:new Set()};
+      cur.count += rec.count;
+      rec.rawMatches.forEach(t => cur.terms.add(t));
+      bookScores.set(idx, cur);
     });
   }
 
-  // also include books whose title matches directly
-  state.booksIndex.forEach(b=>{
-    if(b.title.includes(q) && !bookScores.has(b.id)){
-      bookScores.set(b.id, {count:0, terms:new Set(['(書名相符)'])});
+  // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
+  const normQ = normalizeText(q);
+  state.booksIndex.forEach((b, idx)=>{
+    const normTitle = normalizeText(b.title);
+    if((b.title.includes(q) || normTitle.includes(normQ)) && !bookScores.has(idx)){
+      bookScores.set(idx, {count:0, terms:new Set(['(書名相符)'])});
     }
   });
 
+  hideLoading();
+
   const bookResults = [...bookScores.entries()]
-    .map(([bookId, rec])=>({book: state.booksById.get(bookId), count: rec.count, terms:[...rec.terms]}))
+    .map(([idx, rec])=>({book: state.booksIndex[idx], count: rec.count, terms:[...rec.terms]}))
     .filter(r=>r.book)
     .sort((a,b)=> b.count - a.count)
     .slice(0, 60);
@@ -332,7 +431,7 @@ function showResults({title, mapping, bookResults, searchTerms}){
       li.innerHTML = `
         <div class="book-result-top">
           <span class="book-result-title">${escapeHtml(r.book.title)}</span>
-          ${r.count !== null ? `<span class="book-result-count">符合 ${r.count} 次</span>` : ''}
+          ${r.count > 0 ? `<span class="book-result-count">符合 ${r.count} 次</span>` : (r.count === null ? '' : '<span class="book-result-count">書名相符</span>')}
         </div>
         <div class="book-result-meta">
           <span>${escapeHtml(r.book.author || '作者不詳')}</span>
@@ -342,7 +441,14 @@ function showResults({title, mapping, bookResults, searchTerms}){
         </div>
         <div class="book-result-desc">${escapeHtml(r.book.desc || '')}</div>
       `;
-      li.addEventListener('click', ()=> openReader(r.book.id, state.currentQuery ? [...(searchTerms||[state.currentQuery])] : []));
+      li.addEventListener('click', ()=>{
+        // 優先用這本書實際比對到的原文寫法（可能含異體字）來高亮，
+        // 若是純書名相符（沒有內文比對詞），退回用查詢字串本身
+        const highlightTerms = (r.terms && r.terms.length && r.terms[0] !== '(書名相符)')
+          ? r.terms
+          : (state.currentQuery ? [state.currentQuery] : []);
+        openReader(r.book.id, highlightTerms);
+      });
       el.bookResultsList.appendChild(li);
     });
   }
@@ -355,7 +461,7 @@ async function openReader(bookId, highlightTerms){
   showLoading('開啟典籍中…');
   let data;
   try{
-    data = await fetchJSON(`${DATA_BASE}/books/${encodeURIComponent(bookId)}.json`);
+    data = await getBookContent(bookId);
   }catch(err){
     hideLoading();
     alert('無法載入該典籍內容');

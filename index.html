@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>岐黃尋・中醫典籍病名檢索</title>
-<meta name="description" content="中醫典籍全文檢索，古今病名智慧對照">
+<title>岐黃尋・中醫典籍全文檢索</title>
+<meta name="description" content="中醫典籍全文檢索，病名、藥名、方劑、關鍵字皆可搜尋，古今病名智慧對照">
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap"></noscript>
@@ -20,7 +20,7 @@
       <div class="brand-seal">尋</div>
       <div class="brand-text">
         <h1>岐黃尋</h1>
-        <p class="tagline">中醫典籍病名檢索・古今對照</p>
+        <p class="tagline">中醫典籍全文檢索・病名藥名方劑皆可查</p>
       </div>
     </div>
     <div class="stats" id="corpusStats" aria-live="polite"></div>
@@ -30,19 +30,19 @@
 <main>
   <section class="search-hero">
     <div class="search-hero-inner">
-      <label for="searchInput" class="search-label">輸入病名，古今皆可</label>
+      <label for="searchInput" class="search-label">輸入病名、藥名、方劑或關鍵字，古今皆可</label>
       <div class="search-box">
         <input
           type="text"
           id="searchInput"
           autocomplete="off"
           spellcheck="false"
-          placeholder="例如：消渴、糖尿病、傷寒、痛風…"
+          placeholder="例如：消渴、黃芪、大黃蟅蟲丸、傷寒…"
         >
         <div class="search-icon" aria-hidden="true">尋</div>
         <ul id="autocompleteList" class="autocomplete-list" hidden></ul>
       </div>
-      <p class="search-hint">輸入現代病名，系統會提示對應的古代病名；輸入古代病名，也會標明其可能對應的現代病名。</p>
+      <p class="search-hint">支援病名、藥名、方劑名或任意關鍵字全文檢索，簡體字與常見異體字（如蟅／䗪、黃芪／黃耆）會自動比對；輸入病名時亦會提示古今病名對照。</p>
     </div>
   </section>
 
@@ -70,7 +70,7 @@
   <section id="landingArea" class="landing-area">
     <div class="landing-inner">
       <h2>關於這個工具</h2>
-      <p>本站收錄歷代中醫典籍共 <strong id="bookCountLanding">—</strong> 部，來源整理自「中醫笈成」開放資料。輸入病名後，系統會先比對古今病名對照表，再於全文索引中尋找相關典籍段落，協助快速定位古籍中的相關論述。</p>
+      <p>本站收錄歷代中醫典籍共 <strong id="bookCountLanding">—</strong> 部，來源整理自「中醫笈成」開放資料。輸入關鍵字（病名、藥名、方劑名皆可）後，系統會在全部典籍原文中搜尋相關段落，並自動比對古今病名對照表、統一簡體字與常見異體字寫法，協助快速定位古籍中的相關論述。</p>
       <p class="disclaimer">古今病名對照僅供臨床參考與文獻檢索輔助，中醫辨證與現代西醫診斷概念未必一一對應，仍請以個別典籍原文與專業判斷為準。</p>
       <div class="landing-categories">
         <h3>常見分類</h3>
