@@ -43,11 +43,21 @@ const el = {
   loadingToast: document.getElementById('loadingToast'),
 };
 
+let loadingSafetyTimer = null;
 function showLoading(msg){
   el.loadingToast.textContent = msg || '載入中…';
   el.loadingToast.hidden = false;
+  // 每次顯示載入提示都重新設定保護計時器，避免任何一次操作卡住時提示永遠不消失
+  if(loadingSafetyTimer) clearTimeout(loadingSafetyTimer);
+  loadingSafetyTimer = setTimeout(()=>{
+    console.warn('載入提示逾時，自動隱藏');
+    el.loadingToast.hidden = true;
+  }, 15000);
 }
-function hideLoading(){ el.loadingToast.hidden = true; }
+function hideLoading(){
+  el.loadingToast.hidden = true;
+  if(loadingSafetyTimer){ clearTimeout(loadingSafetyTimer); loadingSafetyTimer = null; }
+}
 
 async function fetchJSON(path){
   const res = await fetch(path);
@@ -132,11 +142,12 @@ function renderCategoryLists(){
 
 function browseCategory(cat){
   el.searchInput.value = '';
+  state.currentQuery = ''; // 清空上次搜尋詞，避免點進典籍時錯誤標記到不相關的舊搜尋字
   const books = state.booksIndex.filter(b => (b.category||'').split(/\s+/).includes(cat));
   showResults({
     title: `分類：${cat}`,
     mapping: null,
-    bookResults: books.map(b=>({book:b, count:null})),
+    bookResults: books.map(b=>({book:b, count:null, terms:[]})),
   });
 }
 
@@ -156,26 +167,25 @@ function normalizeText(text){
 }
 
 // 依字元取得雙字元索引分片（有快取，找不到回傳空物件而不是報錯）
-async function getShard(ch){
+// 快取存的是 Promise 本身（而非等下載完的結果），避免多個搜尋詞同時搶著抓同一個分片時重複發送請求
+function getShard(ch){
   const hex = ch.codePointAt(0).toString(16);
   if(state.shardCache.has(hex)) return state.shardCache.get(hex);
-  let data;
-  try{
-    const res = await fetch(`${DATA_BASE}/bigram-shards/${hex}.json`);
-    data = res.ok ? await res.json() : {};
-  }catch(err){
-    data = {};
-  }
-  state.shardCache.set(hex, data);
-  return data;
+  const promise = fetch(`${DATA_BASE}/bigram-shards/${hex}.json`)
+    .then(res => res.ok ? res.json() : {})
+    .catch(() => ({}));
+  state.shardCache.set(hex, promise);
+  return promise;
 }
 
 // 取得典籍全文內容（有快取，供搜尋驗證與閱讀器共用，避免重複下載）
-async function getBookContent(bookId){
+// 同樣快取 Promise 本身，避免多個搜尋詞同時要驗證同一本書時重複下載
+function getBookContent(bookId){
   if(state.bookContentCache.has(bookId)) return state.bookContentCache.get(bookId);
-  const data = await fetchJSON(`${DATA_BASE}/books/${encodeURIComponent(bookId)}.json`);
-  state.bookContentCache.set(bookId, data);
-  return data;
+  const promise = fetchJSON(`${DATA_BASE}/books/${encodeURIComponent(bookId)}.json`)
+    .catch(err => { state.bookContentCache.delete(bookId); throw err; }); // 失敗時清掉快取，允許之後重試
+  state.bookContentCache.set(bookId, promise);
+  return promise;
 }
 
 const MAX_CANDIDATE_BOOKS = 60;  // 候選典籍上限，避免極常見關鍵字造成過多下載
@@ -269,6 +279,7 @@ let acActiveIndex = -1;
 
 function buildAutocomplete(query){
   if(!query){ el.autocompleteList.hidden = true; return; }
+  if(!state.diseaseMap || !state.booksIndex) return; // 資料尚未載入完成，先不處理，避免報錯
   const q = query.trim();
   const results = [];
 
@@ -317,8 +328,10 @@ function renderAutocomplete(){
   el.autocompleteList.hidden = false;
 }
 
+let autocompleteDebounceTimer = null;
 el.searchInput.addEventListener('input', ()=>{
-  buildAutocomplete(el.searchInput.value);
+  clearTimeout(autocompleteDebounceTimer);
+  autocompleteDebounceTimer = setTimeout(()=> buildAutocomplete(el.searchInput.value), 120);
 });
 
 el.searchInput.addEventListener('keydown', (e)=>{
@@ -348,14 +361,22 @@ document.addEventListener('click', (e)=>{
 async function runSearch(rawQuery){
   const q = rawQuery.trim();
   if(!q) return;
+  if(!state.booksIndex || !state.diseaseMap){
+    showLoading('資料尚未載入完成，請稍候再試一次…');
+    setTimeout(hideLoading, 2000);
+    return;
+  }
   state.currentQuery = q;
 
   // 序號機制：如果使用者又觸發了新的搜尋，這次搜尋跑完後就不再更新畫面
   const myToken = ++state.searchToken;
 
   // 1. disease-map lookup（病名古今對照，僅供顯示與延伸搜尋詞用）
+  //    同時比對正規化後的字串，讓輸入簡體字/異體字時病名對照卡片也能正確顯示
+  const normQ = normalizeText(q);
   const mappingMatches = state.diseaseMap.filter(entry =>
-    entry.modern.includes(q) || entry.ancient.some(a => a.includes(q) || q.includes(a))
+    entry.modern.includes(q) || normalizeText(entry.modern).includes(normQ) ||
+    entry.ancient.some(a => a.includes(q) || q.includes(a) || normalizeText(a).includes(normQ))
   );
 
   // 2. gather candidate search terms：原始查詢 + 病名對照表中的古代病名
@@ -389,7 +410,6 @@ async function runSearch(rawQuery){
   if(myToken !== state.searchToken) return;
 
   // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
-  const normQ = normalizeText(q);
   state.booksIndex.forEach((b, idx)=>{
     const normTitle = normalizeText(b.title);
     if((b.title.includes(q) || normTitle.includes(normQ)) && !bookScores.has(idx)){
@@ -583,17 +603,10 @@ function highlightText(text, terms){
   let escaped = escapeHtml(text);
   const uniqueTerms = [...new Set(terms)].filter(t => t && t.length >= 1).sort((a,b)=>b.length-a.length);
   if(!uniqueTerms.length) return escaped;
-  const pattern = new RegExp(uniqueTerms.map(t => escapeRegex(t)).join('|'), 'g');
+  // 先做 HTML escape 再做正規表示式跳脫，確保比對對象跟 escaped 文字的編碼方式一致
+  const pattern = new RegExp(uniqueTerms.map(t => escapeRegex(escapeHtml(t))).join('|'), 'g');
   return escaped.replace(pattern, m => `<mark>${m}</mark>`);
 }
 function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Safety: auto-hide loading toast after 5 seconds
-setTimeout(function(){
-  var t = document.getElementById('loadingToast');
-  if(t && !t.hidden) {
-    console.warn('Auto-hiding stuck loading toast');
-    t.hidden = true;
-  }
-}, 15000);  // 15s safety timeout
 init();
