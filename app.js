@@ -13,6 +13,7 @@ const state = {
   currentQuery: '',
   currentMatches: [],     // indices of <mark> in reader for nav
   currentMatchPos: 0,
+  searchToken: 0,          // 遞增序號，避免舊搜尋（較慢）蓋掉新搜尋（較快）的結果
 };
 
 const el = {
@@ -228,6 +229,12 @@ async function fullTextSearchTerm(term){
   }
 
   if(candidateIndices.length > MAX_CANDIDATE_BOOKS){
+    // 優先驗證字數較少的典籍：下載快、驗證快，讓使用者更快看到結果
+    candidateIndices.sort((a, b) => {
+      const ca = Number(state.booksIndex[a]?.charCount) || Infinity;
+      const cb = Number(state.booksIndex[b]?.charCount) || Infinity;
+      return ca - cb;
+    });
     candidateIndices = candidateIndices.slice(0, MAX_CANDIDATE_BOOKS);
   }
 
@@ -343,6 +350,9 @@ async function runSearch(rawQuery){
   if(!q) return;
   state.currentQuery = q;
 
+  // 序號機制：如果使用者又觸發了新的搜尋，這次搜尋跑完後就不再更新畫面
+  const myToken = ++state.searchToken;
+
   // 1. disease-map lookup（病名古今對照，僅供顯示與延伸搜尋詞用）
   const mappingMatches = state.diseaseMap.filter(entry =>
     entry.modern.includes(q) || entry.ancient.some(a => a.includes(q) || q.includes(a))
@@ -359,6 +369,9 @@ async function runSearch(rawQuery){
   try{
     // 多個搜尋詞（原始輸入 + 古今病名對照延伸詞）平行處理，避免依序等待造成長時間卡住
     const allHits = await Promise.all([...searchTerms].map(term => fullTextSearchTerm(term)));
+
+    if(myToken !== state.searchToken) return; // 已經有更新的搜尋在跑，這次結果直接丟棄
+
     allHits.forEach(hits=>{
       hits.forEach((rec, idx)=>{
         const cur = bookScores.get(idx) || {count:0, terms:new Set()};
@@ -370,8 +383,10 @@ async function runSearch(rawQuery){
   }catch(err){
     console.error('全文搜尋發生錯誤：', err);
   }finally{
-    hideLoading();
+    if(myToken === state.searchToken) hideLoading();
   }
+
+  if(myToken !== state.searchToken) return;
 
   // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
   const normQ = normalizeText(q);
