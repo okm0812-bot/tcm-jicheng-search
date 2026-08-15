@@ -14,6 +14,7 @@ const state = {
   currentMatches: [],     // indices of <mark> in reader for nav
   currentMatchPos: 0,
   searchToken: 0,          // 遞增序號，避免舊搜尋（較慢）蓋掉新搜尋（較快）的結果
+  loadMore: null,          // 目前搜尋尚未驗證的候選典籍狀態，供「顯示更多」按鈕使用
 };
 
 const el = {
@@ -143,6 +144,7 @@ function renderCategoryLists(){
 function browseCategory(cat){
   el.searchInput.value = '';
   state.currentQuery = ''; // 清空上次搜尋詞，避免點進典籍時錯誤標記到不相關的舊搜尋字
+  state.loadMore = null;   // 分類瀏覽不是全文檢索，清掉上次搜尋殘留的「顯示更多」狀態
   const books = state.booksIndex.filter(b => (b.category||'').split(/\s+/).includes(cat));
   showResults({
     title: `分類：${cat}`,
@@ -188,7 +190,7 @@ function getBookContent(bookId){
   return promise;
 }
 
-const MAX_CANDIDATE_BOOKS = 60;  // 候選典籍上限，避免極常見關鍵字造成過多下載
+const MAX_CANDIDATE_BOOKS = 90;  // 每一批實際下載驗證的候選典籍數上限（超過的部分不會被丟棄，而是保留給「顯示更多」使用）
 const FETCH_CONCURRENCY = 15;    // 候選典籍平行下載數，加速驗證階段
 
 // 以固定併發數平行處理陣列，避免一次發出過多請求
@@ -206,50 +208,59 @@ async function mapWithConcurrency(items, limit, asyncFn){
   return results;
 }
 
-// 對單一關鍵字做全文檢索，回傳 Map(bookIndex -> {count, rawMatches:Set})
-async function fullTextSearchTerm(term){
+// 計算某個查詢詞的候選典籍清單，依「相關度」（命中的雙字元索引數）由高到低排序。
+// 這裡只算候選、不下載全文驗證，讓呼叫端可以自行決定要驗證前幾筆（供分批載入使用）。
+//
+// 排序邏輯特別說明：舊版是「一律依字數由小到大排序」，這會讓本草綱目、普濟方這類
+// 字數龐大的重要典籍，只因為字數大就永遠排不進候選上限，跟關鍵字實際相不相關無關。
+// 改成依「命中幾個雙字元」排序後，真正高度相關的大部頭典籍會排到前面；只有在
+// 候選數量真的超過負荷、且相關度較低時，才會被排到後面等待「顯示更多」。
+async function computeCandidates(term){
   const q = normalizeText(term.trim());
-  const result = new Map();
-  if(!q) return result;
+  if(!q) return {q, candidates: []};
 
+  const relevance = new Map(); // bookIndex -> 命中雙字元數量（相關度分數的近似值）
   let candidateIndices;
 
   if(q.length === 1){
-    // 單字查詢：用「以此字開頭的所有雙字元」聯集，近似代表「典籍含有此字」
+    // 單字查詢：以此字開頭的每個雙字元各自計一分，命中越多不同雙字元，代表此字在該書出現越頻繁
     const shard = await getShard(q[0]);
-    const set = new Set();
-    Object.values(shard).forEach(arr => arr.forEach(i => set.add(i)));
-    candidateIndices = [...set];
+    Object.values(shard).forEach(arr => arr.forEach(i => relevance.set(i, (relevance.get(i)||0) + 1)));
+    candidateIndices = [...relevance.keys()];
   } else {
-    // 多字查詢：拆成連續雙字元，逐一取交集
+    // 多字查詢：先平行抓取全部雙字元分片（取代舊版逐一 await），減少查詢字越長、
+    // 網路往返延遲越高的問題；再依序取交集找出同時包含所有雙字元的典籍。
+    const bigrams = [];
+    for(let i = 0; i < q.length - 1; i++) bigrams.push(q.slice(i, i+2));
+    const shards = await Promise.all(bigrams.map(bg => getShard(bg[0])));
+
     let candidateSet = null;
-    for(let i = 0; i < q.length - 1; i++){
-      const bigram = q.slice(i, i+2);
-      const shard = await getShard(bigram[0]);
-      const bookList = shard[bigram] || [];
+    for(let i = 0; i < bigrams.length; i++){
+      const bookList = shards[i][bigrams[i]] || [];
+      bookList.forEach(b => relevance.set(b, (relevance.get(b)||0) + 1));
       const bookSet = new Set(bookList);
-      if(candidateSet === null){
-        candidateSet = bookSet;
-      } else {
-        candidateSet = new Set([...candidateSet].filter(x => bookSet.has(x)));
-      }
-      if(candidateSet.size === 0) break; // 提早結束：不可能有結果
+      candidateSet = candidateSet === null ? bookSet : new Set([...candidateSet].filter(x => bookSet.has(x)));
+      if(candidateSet.size === 0) break; // 交集已空，不可能有結果，提早結束
     }
     candidateIndices = candidateSet ? [...candidateSet] : [];
   }
 
-  if(candidateIndices.length > MAX_CANDIDATE_BOOKS){
-    // 優先驗證字數較少的典籍：下載快、驗證快，讓使用者更快看到結果
-    candidateIndices.sort((a, b) => {
-      const ca = Number(state.booksIndex[a]?.charCount) || Infinity;
-      const cb = Number(state.booksIndex[b]?.charCount) || Infinity;
-      return ca - cb;
-    });
-    candidateIndices = candidateIndices.slice(0, MAX_CANDIDATE_BOOKS);
-  }
+  candidateIndices.sort((a, b) => {
+    const ra = relevance.get(a) || 0, rb = relevance.get(b) || 0;
+    if(rb !== ra) return rb - ra; // 相關度高的優先
+    const ca = Number(state.booksIndex[a]?.charCount) || Infinity;
+    const cb = Number(state.booksIndex[b]?.charCount) || Infinity;
+    return ca - cb; // 相關度相同時，字數小的優先（下載較快）
+  });
 
-  // 平行抓取候選典籍全文，實際驗證比對位置與次數
-  await mapWithConcurrency(candidateIndices, FETCH_CONCURRENCY, async (idx)=>{
+  return {q, candidates: candidateIndices};
+}
+
+// 對一批候選典籍索引，實際下載全文並驗證關鍵字實際出現的位置與次數
+// 回傳 Map(bookIndex -> {count, rawMatches:Set})
+async function verifyCandidates(q, indices){
+  const result = new Map();
+  await mapWithConcurrency(indices, FETCH_CONCURRENCY, async (idx)=>{
     const bookMeta = state.booksIndex[idx];
     if(!bookMeta) return;
     let data;
@@ -269,8 +280,15 @@ async function fullTextSearchTerm(term){
     }
     if(count > 0) result.set(idx, {count, rawMatches, book: bookMeta});
   });
-
   return result;
+}
+
+// 對單一關鍵字做全文檢索：算出候選並驗證前 MAX_CANDIDATE_BOOKS 筆。
+// 供古今病名對照延伸出的查詢詞使用（這類詞通常較具體，候選數較少，暫不做分批載入）。
+async function fullTextSearchTerm(term){
+  const {q, candidates} = await computeCandidates(term);
+  if(!q) return new Map();
+  return verifyCandidates(q, candidates.slice(0, MAX_CANDIDATE_BOOKS));
 }
 
 // ===== Autocomplete =====
@@ -383,17 +401,34 @@ async function runSearch(rawQuery){
   //    （病名、藥名、方劑名、任意關鍵字都走同一套全文檢索邏輯）
   const searchTerms = new Set([q]);
   mappingMatches.forEach(m => m.ancient.forEach(a => searchTerms.add(a)));
+  const extraTerms = [...searchTerms].filter(t => t !== q);
 
   showLoading('搜尋典籍全文中…');
 
   const bookScores = new Map(); // bookIndex -> {count, terms:Set}
+  let mainCandidates = [];
+  let mainVerifiedCount = 0;
+  let mainNormQ = normQ;
+
   try{
-    // 多個搜尋詞（原始輸入 + 古今病名對照延伸詞）平行處理，避免依序等待造成長時間卡住
-    const allHits = await Promise.all([...searchTerms].map(term => fullTextSearchTerm(term)));
+    // 主查詢詞：先算出「全部」候選並依相關度排序，只驗證前 MAX_CANDIDATE_BOOKS 筆；
+    // 其餘候選不丟棄，存進 state.loadMore，讓使用者可以按「顯示更多」繼續載入——
+    // 呼應 jicheng.tw 的原則：範圍受限沒關係，但一定要讓使用者知道、且能自己選擇要不要繼續。
+    const mainResult = await computeCandidates(q);
+    mainCandidates = mainResult.candidates;
+    mainNormQ = mainResult.q;
+    const firstBatch = mainCandidates.slice(0, MAX_CANDIDATE_BOOKS);
+    mainVerifiedCount = firstBatch.length;
+
+    // 主查詢詞的驗證 + 病名對照延伸詞的完整搜尋，平行處理，避免依序等待造成長時間卡住
+    const [mainHits, ...extraHits] = await Promise.all([
+      verifyCandidates(mainNormQ, firstBatch),
+      ...extraTerms.map(term => fullTextSearchTerm(term)),
+    ]);
 
     if(myToken !== state.searchToken) return; // 已經有更新的搜尋在跑，這次結果直接丟棄
 
-    allHits.forEach(hits=>{
+    [mainHits, ...extraHits].forEach(hits=>{
       hits.forEach((rec, idx)=>{
         const cur = bookScores.get(idx) || {count:0, terms:new Set()};
         cur.count += rec.count;
@@ -420,22 +455,89 @@ async function runSearch(rawQuery){
   const bookResults = [...bookScores.entries()]
     .map(([idx, rec])=>({book: state.booksIndex[idx], count: rec.count, terms:[...rec.terms]}))
     .filter(r=>r.book)
-    .sort((a,b)=> b.count - a.count)
-    .slice(0, 60);
+    .sort((a,b)=> b.count - a.count);
+
+  const remainingCount = Math.max(0, mainCandidates.length - mainVerifiedCount);
+
+  // 保留「尚未驗證的候選」與目前累積的分數，供「顯示更多」按鈕使用
+  state.loadMore = remainingCount > 0 ? {
+    token: myToken,
+    q: mainNormQ,
+    candidates: mainCandidates,
+    verifiedCount: mainVerifiedCount,
+    bookScores,
+    mappingMatches,
+    resultsTitle: `「${q}」相關典籍`,
+  } : null;
 
   showResults({
     title: `「${q}」相關典籍`,
     mapping: mappingMatches.length ? mappingMatches : null,
     bookResults,
     searchTerms: [...searchTerms],
+    totalCandidates: mainCandidates.length,
+    remainingCount,
   });
 }
 
-function showResults({title, mapping, bookResults, searchTerms}){
+// 「顯示更多典籍」：驗證下一批先前保留的候選典籍，把結果併入目前的搜尋結果
+async function loadMoreCandidates(){
+  const lm = state.loadMore;
+  if(!lm || lm.token !== state.searchToken) return;
+
+  const btn = document.getElementById('loadMoreCandidatesBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '載入中…'; }
+
+  const nextBatch = lm.candidates.slice(lm.verifiedCount, lm.verifiedCount + MAX_CANDIDATE_BOOKS);
+  let hits;
+  try{
+    hits = await verifyCandidates(lm.q, nextBatch);
+  }catch(err){
+    console.error('載入更多典籍時發生錯誤：', err);
+    if(btn){ btn.disabled = false; btn.textContent = '載入失敗，點此重試'; }
+    return;
+  }
+
+  if(lm.token !== state.searchToken) return; // 使用者已經開始新搜尋，這批結果不再顯示
+
+  hits.forEach((rec, idx)=>{
+    const cur = lm.bookScores.get(idx) || {count:0, terms:new Set()};
+    cur.count += rec.count;
+    rec.rawMatches.forEach(t => cur.terms.add(t));
+    lm.bookScores.set(idx, cur);
+  });
+  lm.verifiedCount += nextBatch.length;
+
+  const bookResults = [...lm.bookScores.entries()]
+    .map(([idx, rec])=>({book: state.booksIndex[idx], count: rec.count, terms:[...rec.terms]}))
+    .filter(r=>r.book)
+    .sort((a,b)=> b.count - a.count);
+
+  const remainingCount = Math.max(0, lm.candidates.length - lm.verifiedCount);
+  state.loadMore = remainingCount > 0 ? lm : null;
+
+  showResults({
+    title: lm.resultsTitle,
+    mapping: lm.mappingMatches.length ? lm.mappingMatches : null,
+    bookResults,
+    searchTerms: [],
+    totalCandidates: lm.candidates.length,
+    remainingCount,
+  });
+}
+
+function showResults({title, mapping, bookResults, searchTerms, totalCandidates, remainingCount}){
   el.landingArea.hidden = true;
   el.resultsArea.hidden = false;
   el.resultsTitle.textContent = title;
-  el.resultsCount.textContent = bookResults.length ? `共 ${bookResults.length} 部典籍` : '';
+
+  // 結果數量說明：如果還有候選典籍尚未載入驗證，明確告知使用者還有多少、而不是悄悄隱藏
+  // （呼應 jicheng.tw「範圍受限沒關係，但要讓使用者知道」的原則）
+  if(remainingCount > 0){
+    el.resultsCount.textContent = `已顯示 ${bookResults.length} 部（依相關度排序）・符合關鍵字的候選典籍共 ${totalCandidates} 部，尚有 ${remainingCount} 部未載入`;
+  } else {
+    el.resultsCount.textContent = bookResults.length ? `共 ${bookResults.length} 部典籍` : '';
+  }
 
   if(mapping && mapping.length){
     el.mappingCard.hidden = false;
@@ -491,6 +593,19 @@ function showResults({title, mapping, bookResults, searchTerms}){
       });
       el.bookResultsList.appendChild(li);
     });
+  }
+
+  // 「顯示更多典籍」按鈕：每次重繪結果都先移除舊按鈕，避免重複或指向過期狀態
+  const oldBtn = document.getElementById('loadMoreCandidatesBtn');
+  if(oldBtn) oldBtn.remove();
+  if(remainingCount > 0){
+    const btn = document.createElement('button');
+    btn.id = 'loadMoreCandidatesBtn';
+    btn.type = 'button';
+    btn.textContent = `顯示更多典籍（還有 ${remainingCount} 部候選未檢查，依相關度排序）`;
+    btn.style.cssText = 'display:block;margin:16px auto 0;padding:10px 20px;cursor:pointer;';
+    btn.addEventListener('click', loadMoreCandidates);
+    el.bookResultsList.insertAdjacentElement('afterend', btn);
   }
 
   window.scrollTo({top: el.resultsArea.offsetTop - 20, behavior:'smooth'});
