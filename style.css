@@ -74,7 +74,7 @@ body::before{
 /* ===== Header ===== */
 .site-header{
   position:relative;
-  z-index:2;
+  z-index:30;
   border-bottom:1px solid var(--hairline);
   background:linear-gradient(180deg, rgba(236,231,217,0.97), rgba(236,231,217,0.88));
   backdrop-filter:blur(6px);
@@ -126,7 +126,7 @@ body::before{
 /* ===== Search hero ===== */
 .search-hero{
   position:relative;
-  z-index:1;
+  z-index:10;
   padding:64px 24px 48px;
   border-bottom:1px solid var(--hairline);
 }
