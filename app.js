@@ -20,6 +20,7 @@ const state = {
 
 const el = {
   searchInput: document.getElementById('searchInput'),
+  searchIconBtn: document.getElementById('searchIconBtn'),
   autocompleteList: document.getElementById('autocompleteList'),
   corpusStats: document.getElementById('corpusStats'),
   resultsArea: document.getElementById('resultsArea'),
@@ -513,6 +514,12 @@ document.addEventListener('click', (e)=>{
   if(!el.searchInput.contains(e.target) && !el.autocompleteList.contains(e.target)){
     el.autocompleteList.hidden = true;
   }
+});
+
+// 搜尋框右側的「尋」字圖示：點擊直接執行搜尋，效果等同按下 Enter
+el.searchIconBtn.addEventListener('click', ()=>{
+  el.autocompleteList.hidden = true;
+  runSearch(el.searchInput.value);
 });
 
 // ===== Search =====
