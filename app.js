@@ -184,7 +184,11 @@ function browseCategory(cat){
   el.searchInput.value = '';
   state.currentQuery = ''; // 清空上次搜尋詞，避免點進典籍時錯誤標記到不相關的舊搜尋字
   state.loadMore = null;   // 分類瀏覽不是全文檢索，清掉上次搜尋殘留的「顯示更多」狀態
-  const books = state.booksIndex.filter(b => (b.category||'').split(/\s+/).includes(cat));
+  const dynasties = state.activeFilters.dynasties;
+  const books = state.booksIndex.filter(b =>
+    (b.category||'').split(/\s+/).includes(cat) &&
+    (dynasties.size === 0 || dynasties.has(b.dynasty || '朝代不詳')) // 分類是使用者剛點的，這裡只需再套用朝代篩選，跟搜尋時的邏輯一致
+  );
   showResults({
     title: `分類：${cat}`,
     mapping: null,
@@ -246,9 +250,14 @@ function renderActiveFilterChips(){
   el.filterToggleBtn.classList.toggle('has-active', chips.length > 0);
 }
 
-el.filterToggleBtn.addEventListener('click', ()=>{
+// 「進階篩選」按鈕跟搜尋圖示一樣，常常是使用者剛打完字後緊接著點擊，
+// 一樣可能遇到鍵盤收合造成的畫面重排讓 click 沒觸發，所以也用同樣的 touchend 處理。
+function toggleFilterPanel(e){
+  if(e.cancelable) e.preventDefault();
   el.filterPanel.hidden = !el.filterPanel.hidden;
-});
+}
+el.filterToggleBtn.addEventListener('click', toggleFilterPanel);
+el.filterToggleBtn.addEventListener('touchend', toggleFilterPanel, {passive:false});
 el.filterClearBtn.addEventListener('click', ()=>{
   state.activeFilters.categories.clear();
   state.activeFilters.dynasties.clear();
