@@ -15,6 +15,7 @@ const state = {
   currentMatchPos: 0,
   searchToken: 0,          // 遞增序號，避免舊搜尋（較慢）蓋掉新搜尋（較快）的結果
   loadMore: null,          // 目前搜尋尚未驗證的候選典籍狀態，供「顯示更多」按鈕使用
+  activeFilters: { categories: new Set(), dynasties: new Set() }, // 進階篩選：分類／朝代（多選）
 };
 
 const el = {
@@ -30,6 +31,12 @@ const el = {
   noResults: document.getElementById('noResults'),
   categoryList: document.getElementById('categoryList'),
   landingCategoryList: document.getElementById('landingCategoryList'),
+  filterToggleBtn: document.getElementById('filterToggleBtn'),
+  filterPanel: document.getElementById('filterPanel'),
+  filterCategoryOptions: document.getElementById('filterCategoryOptions'),
+  filterDynastyOptions: document.getElementById('filterDynastyOptions'),
+  filterClearBtn: document.getElementById('filterClearBtn'),
+  activeFilterChips: document.getElementById('activeFilterChips'),
   bookCountLanding: document.getElementById('bookCountLanding'),
   readerOverlay: document.getElementById('readerOverlay'),
   readerTitle: document.getElementById('readerTitle'),
@@ -58,6 +65,32 @@ function showLoading(msg){
 function hideLoading(){
   el.loadingToast.hidden = true;
   if(loadingSafetyTimer){ clearTimeout(loadingSafetyTimer); loadingSafetyTimer = null; }
+}
+
+// ===== 背景驗證 Worker =====
+// 把「下載候選典籍全文 + 逐字掃描比對」搬到背景執行緒，避免候選數量一多就卡住主執行緒的
+// 輸入框、捲動與其他 UI 互動。不支援 Worker 的環境（極少見）會自動退回主執行緒版本。
+let verifyWorker = null;
+let workerReqCounter = 0;
+const workerPending = new Map();
+try{
+  if('Worker' in window){
+    verifyWorker = new Worker('verify-worker.js');
+    verifyWorker.onmessage = (e)=>{
+      const msg = e.data;
+      if(msg.type === 'verify-result' && workerPending.has(msg.reqId)){
+        workerPending.get(msg.reqId)(msg.hits);
+        workerPending.delete(msg.reqId);
+      }
+    };
+    verifyWorker.onerror = (err)=>{
+      console.warn('驗證 Worker 發生錯誤，之後的驗證將退回主執行緒處理：', err.message);
+      verifyWorker = null; // 出錯就停用，改走 fallback，避免整站無法搜尋
+    };
+  }
+}catch(err){
+  console.warn('無法建立驗證 Worker，改用主執行緒驗證：', err);
+  verifyWorker = null;
 }
 
 async function fetchJSON(path){
@@ -98,7 +131,12 @@ async function init(){
     console.log('[DEBUG] corpusStats set, bookCountLanding set');
 
     renderCategoryLists();
+    renderFilterOptions();
     console.log('[DEBUG] renderCategoryLists done');
+
+    // 把正規化表交給 Worker，之後每次驗證候選典籍時 Worker 才能自行做簡體/異體字比對
+    if(verifyWorker) verifyWorker.postMessage({type:'init', charNormalizeMap});
+
     hideLoading();  // FIX: hide toast after init completes successfully
   }catch(err){
     console.error('[DEBUG] init() ERROR:', err);
@@ -151,6 +189,88 @@ function browseCategory(cat){
     mapping: null,
     bookResults: books.map(b=>({book:b, count:null, terms:[]})),
   });
+}
+
+// ===== 進階篩選（分類／朝代）=====
+// 概念參考自同量級古籍全文檢索系統（如 CBETA 閱讀器）的標準配置：
+// 讓使用者可以自行先縮小搜尋範圍，範圍以外的候選不會出現在結果裡，且隨時可見、可清除。
+function renderFilterOptions(){
+  const catCounts = new Map(), dynCounts = new Map();
+  state.booksIndex.forEach(b=>{
+    (b.category || '未分類').split(/\s+/).forEach(c => catCounts.set(c, (catCounts.get(c)||0)+1));
+    const dyn = b.dynasty || '朝代不詳';
+    dynCounts.set(dyn, (dynCounts.get(dyn)||0)+1);
+  });
+
+  const buildOptions = (counts, container, filterSet) => {
+    container.innerHTML = '';
+    [...counts.entries()].sort((a,b)=>b[1]-a[1]).forEach(([name,count])=>{
+      const label = document.createElement('label');
+      label.className = 'filter-option';
+      const checked = filterSet.has(name) ? 'checked' : '';
+      label.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}" ${checked}> ${escapeHtml(name)}（${count}）`;
+      label.querySelector('input').addEventListener('change', (e)=>{
+        if(e.target.checked) filterSet.add(name); else filterSet.delete(name);
+        renderActiveFilterChips();
+        if(state.currentQuery) runSearch(state.currentQuery); // 篩選一改變就立刻套用到目前的搜尋結果
+      });
+      container.appendChild(label);
+    });
+  };
+
+  buildOptions(catCounts, el.filterCategoryOptions, state.activeFilters.categories);
+  buildOptions(dynCounts, el.filterDynastyOptions, state.activeFilters.dynasties);
+  renderActiveFilterChips();
+}
+
+function renderActiveFilterChips(){
+  const chips = [
+    ...[...state.activeFilters.categories].map(v => ({type:'categories', value:v})),
+    ...[...state.activeFilters.dynasties].map(v => ({type:'dynasties', value:v})),
+  ];
+  el.activeFilterChips.innerHTML = '';
+  chips.forEach(chip=>{
+    const span = document.createElement('span');
+    span.className = 'filter-chip';
+    span.textContent = chip.value;
+    span.title = '點擊移除此篩選';
+    span.addEventListener('click', ()=>{
+      state.activeFilters[chip.type].delete(chip.value);
+      renderFilterOptions(); // 連同勾選框一起同步取消
+      if(state.currentQuery) runSearch(state.currentQuery);
+    });
+    el.activeFilterChips.appendChild(span);
+  });
+  el.filterToggleBtn.textContent = chips.length ? `進階篩選（${chips.length}）▾` : '進階篩選▾';
+  el.filterToggleBtn.classList.toggle('has-active', chips.length > 0);
+}
+
+el.filterToggleBtn.addEventListener('click', ()=>{
+  el.filterPanel.hidden = !el.filterPanel.hidden;
+});
+el.filterClearBtn.addEventListener('click', ()=>{
+  state.activeFilters.categories.clear();
+  state.activeFilters.dynasties.clear();
+  renderFilterOptions();
+  if(state.currentQuery) runSearch(state.currentQuery);
+});
+document.addEventListener('click', (e)=>{
+  if(!el.filterPanel.hidden && !el.filterPanel.contains(e.target) && e.target !== el.filterToggleBtn){
+    el.filterPanel.hidden = true;
+  }
+});
+
+// 判斷某本典籍（依索引）是否符合目前的分類／朝代篩選；沒有勾選任何篩選時一律通過
+function passesFilters(idx){
+  const {categories, dynasties} = state.activeFilters;
+  if(categories.size === 0 && dynasties.size === 0) return true;
+  const b = state.booksIndex[idx];
+  if(!b) return false;
+  const cats = (b.category || '未分類').split(/\s+/);
+  const dyn = b.dynasty || '朝代不詳';
+  const catOk = categories.size === 0 || cats.some(c => categories.has(c));
+  const dynOk = dynasties.size === 0 || dynasties.has(dyn);
+  return catOk && dynOk;
 }
 
 // ===== 全文檢索引擎 =====
@@ -258,8 +378,28 @@ async function computeCandidates(term){
 
 // 對一批候選典籍索引，實際下載全文並驗證關鍵字實際出現的位置與次數
 // 回傳 Map(bookIndex -> {count, rawMatches:Set})
+// 優先透過背景 Worker 執行（下載+掃描比對都不佔用主執行緒）；Worker 不可用時退回主執行緒版本。
 async function verifyCandidates(q, indices){
   const result = new Map();
+  if(indices.length === 0) return result;
+
+  if(verifyWorker){
+    const items = indices
+      .map(idx => ({idx, bookId: state.booksIndex[idx]?.id}))
+      .filter(item => item.bookId);
+    const hits = await new Promise((resolve)=>{
+      const reqId = ++workerReqCounter;
+      workerPending.set(reqId, resolve);
+      verifyWorker.postMessage({type:'verify', reqId, q, dataBase: DATA_BASE, items});
+    });
+    hits.forEach(h=>{
+      const bookMeta = state.booksIndex[h.idx];
+      if(bookMeta) result.set(h.idx, {count: h.count, rawMatches: new Set(h.rawMatches), book: bookMeta});
+    });
+    return result;
+  }
+
+  // Fallback：Worker 不可用時，在主執行緒逐一驗證（邏輯與 Worker 版本相同）
   await mapWithConcurrency(indices, FETCH_CONCURRENCY, async (idx)=>{
     const bookMeta = state.booksIndex[idx];
     if(!bookMeta) return;
@@ -411,11 +551,12 @@ async function runSearch(rawQuery){
   let mainNormQ = normQ;
 
   try{
-    // 主查詢詞：先算出「全部」候選並依相關度排序，只驗證前 MAX_CANDIDATE_BOOKS 筆；
-    // 其餘候選不丟棄，存進 state.loadMore，讓使用者可以按「顯示更多」繼續載入——
-    // 呼應 jicheng.tw 的原則：範圍受限沒關係，但一定要讓使用者知道、且能自己選擇要不要繼續。
+    // 主查詢詞：先算出「全部」候選並依相關度排序，再套用使用者選的分類/朝代篩選（若有），
+    // 只驗證篩選後前 MAX_CANDIDATE_BOOKS 筆；其餘候選不丟棄，存進 state.loadMore，
+    // 讓使用者可以按「顯示更多」繼續載入——呼應 jicheng.tw 的原則：範圍受限沒關係，
+    // 但一定要讓使用者知道、且能自己選擇要不要繼續。
     const mainResult = await computeCandidates(q);
-    mainCandidates = mainResult.candidates;
+    mainCandidates = mainResult.candidates.filter(passesFilters);
     mainNormQ = mainResult.q;
     const firstBatch = mainCandidates.slice(0, MAX_CANDIDATE_BOOKS);
     mainVerifiedCount = firstBatch.length;
@@ -430,6 +571,7 @@ async function runSearch(rawQuery){
 
     [mainHits, ...extraHits].forEach(hits=>{
       hits.forEach((rec, idx)=>{
+        if(!passesFilters(idx)) return; // 延伸詞的候選也要套用同一套篩選，避免結果不一致
         const cur = bookScores.get(idx) || {count:0, terms:new Set()};
         cur.count += rec.count;
         rec.rawMatches.forEach(t => cur.terms.add(t));
@@ -447,7 +589,7 @@ async function runSearch(rawQuery){
   // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
   state.booksIndex.forEach((b, idx)=>{
     const normTitle = normalizeText(b.title);
-    if((b.title.includes(q) || normTitle.includes(normQ)) && !bookScores.has(idx)){
+    if((b.title.includes(q) || normTitle.includes(normQ)) && !bookScores.has(idx) && passesFilters(idx)){
       bookScores.set(idx, {count:0, terms:new Set(['(書名相符)'])});
     }
   });

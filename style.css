@@ -179,6 +179,108 @@ body::before{
   color:var(--ink-faint);
 }
 
+/* ===== 進階篩選（分類／朝代）===== */
+.filter-bar{
+  margin-top:16px;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:10px;
+  position:relative;
+}
+.filter-toggle-btn{
+  font-family:var(--sans);
+  font-size:0.85rem;
+  color:var(--ink-soft);
+  background:var(--paper-card);
+  border:1px solid var(--hairline);
+  border-radius:2px;
+  padding:6px 14px;
+  cursor:pointer;
+}
+.filter-toggle-btn.has-active{
+  color:var(--seal);
+  border-color:var(--seal);
+}
+.active-filter-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.filter-chip{
+  font-family:var(--sans);
+  font-size:0.78rem;
+  color:var(--paper-card);
+  background:var(--seal);
+  border-radius:12px;
+  padding:3px 10px;
+  cursor:pointer;
+}
+.filter-chip:hover{background:var(--seal-deep);}
+.filter-panel{
+  position:absolute;
+  top:calc(100% + 8px);
+  left:0;
+  right:0;
+  background:var(--paper-card);
+  border:1px solid var(--hairline);
+  border-radius:2px;
+  box-shadow:var(--shadow);
+  padding:16px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:24px;
+  z-index:15;
+  text-align:left;
+}
+.filter-group{flex:1 1 200px; min-width:180px;}
+.filter-group h4{
+  margin:0 0 8px;
+  font-family:var(--sans);
+  font-size:0.8rem;
+  color:var(--ink-faint);
+  font-weight:500;
+}
+.filter-options{
+  max-height:220px;
+  overflow-y:auto;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.filter-option{
+  font-family:var(--sans);
+  font-size:0.85rem;
+  color:var(--ink);
+  display:flex;
+  align-items:center;
+  gap:6px;
+  cursor:pointer;
+}
+.filter-panel > button{
+  font-family:var(--sans);
+  font-size:0.8rem;
+  color:var(--ink-soft);
+  background:transparent;
+  border:1px solid var(--hairline);
+  border-radius:2px;
+  padding:6px 12px;
+  cursor:pointer;
+  align-self:flex-start;
+}
+.filter-panel > button:hover{color:var(--seal); border-color:var(--seal);}
+
+#loadMoreCandidatesBtn{
+  font-family:var(--sans);
+  font-size:0.85rem;
+  color:var(--ink-soft);
+  background:var(--paper-card);
+  border:1px solid var(--hairline);
+  border-radius:2px;
+}
+#loadMoreCandidatesBtn:hover{color:var(--seal); border-color:var(--seal);}
+#loadMoreCandidatesBtn:disabled{opacity:0.6; cursor:default;}
+
 .autocomplete-list{
   position:absolute;
   left:0;right:0;top:calc(100% + 6px);
