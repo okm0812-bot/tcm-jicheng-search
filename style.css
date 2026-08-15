@@ -164,7 +164,7 @@ body::before{
 }
 .search-icon{
   position:absolute;
-  right:18px;
+  right:10px;
   top:50%;
   transform:translateY(-50%);
   font-family:var(--serif);
@@ -174,9 +174,15 @@ body::before{
   background:none;
   border:none;
   padding:6px;
+  min-width:44px;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   line-height:1;
   cursor:pointer;
   border-radius:2px;
+  touch-action:manipulation;
 }
 .search-icon:hover, .search-icon:focus-visible{
   color:var(--seal-deep);
@@ -664,7 +670,7 @@ body::before{
 
 @media (max-width:600px){
   .search-hero{padding:44px 16px 36px;}
-  #searchInput{font-size:1.1rem;padding:15px 48px 15px 18px;}
+  #searchInput{font-size:1.1rem;padding:15px 54px 15px 18px;}
   .header-inner{padding:14px 16px;}
   .brand-text h1{font-size:1.2rem;}
 }

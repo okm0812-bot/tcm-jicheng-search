@@ -517,10 +517,16 @@ document.addEventListener('click', (e)=>{
 });
 
 // 搜尋框右側的「尋」字圖示：點擊直接執行搜尋，效果等同按下 Enter
-el.searchIconBtn.addEventListener('click', ()=>{
+// 手機上額外處理 touchend：輸入框失焦、虛擬鍵盤收合造成的畫面重排，
+// 常常會讓瀏覽器之後合成的 click 事件對不準原本的觸控座標而沒有觸發，
+// 改成在 touchend 當下就直接執行，並用 preventDefault() 避免之後又重複觸發一次 click。
+function triggerSearchFromIcon(e){
+  if(e.cancelable) e.preventDefault();
   el.autocompleteList.hidden = true;
   runSearch(el.searchInput.value);
-});
+}
+el.searchIconBtn.addEventListener('click', triggerSearchFromIcon);
+el.searchIconBtn.addEventListener('touchend', triggerSearchFromIcon, {passive:false});
 
 // ===== Search =====
 async function runSearch(rawQuery){
