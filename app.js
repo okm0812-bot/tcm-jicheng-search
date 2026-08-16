@@ -383,7 +383,65 @@ async function computeCandidates(term){
     return ca - cb; // 相關度相同時，字數小的優先（下載較快）
   });
 
-  return {q, candidates: candidateIndices};
+  return {q, candidates: candidateIndices, relevance};
+}
+
+// ===== 多詞 AND 搜尋（例如輸入「黃芪 消渴」，用空格/頓號/逗號分隔） =====
+// 標準的多詞搜尋作法：先用候選數最少（最稀有、最具篩選力）的詞縮小範圍，
+// 再依序跟其他詞的候選集合取交集，最後才對縮小後的候選批次做全文驗證，
+// 確保每一本入選的典籍是「所有詞都真的有出現」而不是只出現其中一個詞。
+async function computeAndCandidates(subTerms){
+  const results = await Promise.all(subTerms.map(t => computeCandidates(t)));
+  const valid = results.filter(r => r.q); // 防禦：正規化後變空字串的子詞（理論上不會發生，外層已過濾）就跳過
+
+  if(valid.length === 0) return {subQueries: [], candidates: []};
+  if(valid.length === 1) return {subQueries: [valid[0].q], candidates: valid[0].candidates};
+
+  valid.sort((a,b)=> a.candidates.length - b.candidates.length);
+  let candidateSet = new Set(valid[0].candidates);
+  for(let i = 1; i < valid.length; i++){
+    const s = new Set(valid[i].candidates);
+    candidateSet = new Set([...candidateSet].filter(x => s.has(x)));
+    if(candidateSet.size === 0) break;
+  }
+
+  // 相關度＝每個子詞各自命中雙字元數的加總，交集後的候選通常已經不多，
+  // 這裡排序主要是決定「萬一還是超過批次上限，優先驗證誰」
+  const candidates = [...candidateSet].sort((a,b)=>{
+    let ra = 0, rb = 0;
+    valid.forEach(r=>{ ra += r.relevance.get(a) || 0; rb += r.relevance.get(b) || 0; });
+    if(rb !== ra) return rb - ra;
+    const ca = Number(state.booksIndex[a]?.charCount) || Infinity;
+    const cb = Number(state.booksIndex[b]?.charCount) || Infinity;
+    return ca - cb;
+  });
+
+  return {subQueries: valid.map(r=>r.q), candidates};
+}
+
+// 對一批候選典籍，驗證是否「同時」包含所有子詞（AND）；任一子詞在某本書比對次數為 0，整本排除。
+// 回傳 Map(bookIndex -> {count, rawMatches:Set})，count 是各子詞比對次數加總，
+// rawMatches 是各子詞比對到的原文寫法聯集（供後續在典籍內文中一起標亮）。
+async function verifyAndCandidates(subQueries, indices){
+  const result = new Map();
+  if(indices.length === 0 || subQueries.length === 0) return result;
+  if(subQueries.length === 1) return verifyCandidates(subQueries[0], indices);
+
+  const perTermHits = await Promise.all(subQueries.map(sq => verifyCandidates(sq, indices)));
+
+  indices.forEach(idx=>{
+    let totalCount = 0;
+    const rawMatches = new Set();
+    const allPresent = perTermHits.every(hits=>{
+      const rec = hits.get(idx);
+      if(!rec || rec.count === 0) return false;
+      totalCount += rec.count;
+      rec.rawMatches.forEach(t => rawMatches.add(t));
+      return true;
+    });
+    if(allPresent) result.set(idx, {count: totalCount, rawMatches});
+  });
+  return result;
 }
 
 // 對一批候選典籍索引，實際下載全文並驗證關鍵字實際出現的位置與次數
@@ -433,12 +491,15 @@ async function verifyCandidates(q, indices){
   return result;
 }
 
-// 對單一關鍵字做全文檢索：算出候選並驗證前 MAX_CANDIDATE_BOOKS 筆。
+// 對單一關鍵字做全文檢索：算出候選、套用篩選後驗證前 MAX_CANDIDATE_BOOKS 筆。
 // 供古今病名對照延伸出的查詢詞使用（這類詞通常較具體，候選數較少，暫不做分批載入）。
 async function fullTextSearchTerm(term){
   const {q, candidates} = await computeCandidates(term);
   if(!q) return new Map();
-  return verifyCandidates(q, candidates.slice(0, MAX_CANDIDATE_BOOKS));
+  // 篩選要在截斷之前套用，否則使用者開了分類/朝代篩選時，驗證名額可能被
+  // 「反正會被篩掉」的書佔走，導致真正符合篩選的書因為名額用完而沒被驗證到
+  const filtered = candidates.filter(passesFilters);
+  return verifyCandidates(q, filtered.slice(0, MAX_CANDIDATE_BOOKS));
 }
 
 // ===== Autocomplete =====
@@ -562,46 +623,62 @@ async function runSearch(rawQuery){
     setTimeout(hideLoading, 2000);
     return;
   }
-  state.currentQuery = q;
-
   // 序號機制：如果使用者又觸發了新的搜尋，這次搜尋跑完後就不再更新畫面
   const myToken = ++state.searchToken;
 
-  // 1. disease-map lookup（病名古今對照，僅供顯示與延伸搜尋詞用）
+  // 0. 多詞 AND 偵測：用空格、頓號、逗號分隔多個關鍵字（例如「黃芪 消渴」），
+  //    每個詞都必須在同一本書裡出現才算符合，不用是連續片語（不像單詞搜尋要求完全連續）。
+  //    多詞模式下不做古今病名對照延伸，保持邏輯單純：使用者已經自己把想法拆成明確的詞了。
+  const subTerms = [...new Set(q.split(/[\s\u3000、，,]+/).map(t=>t.trim()).filter(Boolean))];
+  const isMultiTerm = subTerms.length > 1;
+  // 拆完只剩一個有效詞時（例如打了多餘空格、或重複打了兩次同樣的詞），
+  // 一律改用「去除多餘分隔符/重複後」的乾淨字串來實際搜尋，而不是原始輸入本身
+  // ——原始輸入若含空格，直接當成連續片語去比對幾乎不可能命中任何典籍。
+  const searchQ = subTerms.length === 1 ? subTerms[0] : q;
+  state.currentQuery = searchQ;
+
+  // 1. disease-map lookup（病名古今對照，僅供顯示與延伸搜尋詞用；多詞模式不做）
   //    同時比對正規化後的字串，讓輸入簡體字/異體字時病名對照卡片也能正確顯示
-  const normQ = normalizeText(q);
-  const mappingMatches = state.diseaseMap.filter(entry =>
-    entry.modern.includes(q) || normalizeText(entry.modern).includes(normQ) ||
-    entry.ancient.some(a => a.includes(q) || q.includes(a) || normalizeText(a).includes(normQ))
+  //
+  //    q.includes(a) 這個方向刻意加上長度限制：如果不限制，任何長查詢字串只要「剛好內嵌」
+  //    一個很短的古代病名當子字串（例如查一個方劑全名，裡面恰好包含某個 2 字病名），
+  //    就會誤觸發一張不相關的「古今病名對照」卡片，稀釋掉真正想看的搜尋結果版面。
+  //    只有在查詢字串沒有比對照表詞長出太多時才視為「大概就是在講這個病名」。
+  const normQ = normalizeText(searchQ);
+  const mappingMatches = isMultiTerm ? [] : state.diseaseMap.filter(entry =>
+    entry.modern.includes(searchQ) || normalizeText(entry.modern).includes(normQ) ||
+    entry.ancient.some(a =>
+      a.includes(searchQ) || normalizeText(a).includes(normQ) || (searchQ.includes(a) && searchQ.length <= a.length + 2)
+    )
   );
 
   // 2. gather candidate search terms：原始查詢 + 病名對照表中的古代病名
-  //    （病名、藥名、方劑名、任意關鍵字都走同一套全文檢索邏輯）
-  const searchTerms = new Set([q]);
+  //    （病名、藥名、方劑名、任意關鍵字都走同一套全文檢索邏輯；多詞模式沒有延伸詞）
+  const searchTerms = new Set([searchQ]);
   mappingMatches.forEach(m => m.ancient.forEach(a => searchTerms.add(a)));
-  const extraTerms = [...searchTerms].filter(t => t !== q);
+  const extraTerms = isMultiTerm ? [] : [...searchTerms].filter(t => t !== searchQ);
 
   showLoading('搜尋典籍全文中…');
 
   const bookScores = new Map(); // bookIndex -> {count, terms:Set}
   let mainCandidates = [];
   let mainVerifiedCount = 0;
-  let mainNormQ = normQ;
+  let mainNormQ = normQ; // 單詞模式：正規化後的查詢字串；多詞模式：改存字串陣列（見下）
 
   try{
     // 主查詢詞：先算出「全部」候選並依相關度排序，再套用使用者選的分類/朝代篩選（若有），
     // 只驗證篩選後前 MAX_CANDIDATE_BOOKS 筆；其餘候選不丟棄，存進 state.loadMore，
     // 讓使用者可以按「顯示更多」繼續載入——呼應 jicheng.tw 的原則：範圍受限沒關係，
     // 但一定要讓使用者知道、且能自己選擇要不要繼續。
-    const mainResult = await computeCandidates(q);
+    const mainResult = isMultiTerm ? await computeAndCandidates(subTerms) : await computeCandidates(searchQ);
     mainCandidates = mainResult.candidates.filter(passesFilters);
-    mainNormQ = mainResult.q;
+    mainNormQ = isMultiTerm ? mainResult.subQueries : mainResult.q;
     const firstBatch = mainCandidates.slice(0, MAX_CANDIDATE_BOOKS);
     mainVerifiedCount = firstBatch.length;
 
     // 主查詢詞的驗證 + 病名對照延伸詞的完整搜尋，平行處理，避免依序等待造成長時間卡住
     const [mainHits, ...extraHits] = await Promise.all([
-      verifyCandidates(mainNormQ, firstBatch),
+      isMultiTerm ? verifyAndCandidates(mainNormQ, firstBatch) : verifyCandidates(mainNormQ, firstBatch),
       ...extraTerms.map(term => fullTextSearchTerm(term)),
     ]);
 
@@ -625,9 +702,14 @@ async function runSearch(rawQuery){
   if(myToken !== state.searchToken) return;
 
   // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
+  // 多詞模式下，書名要「同時」包含每個子詞才算相符，跟全文檢索的 AND 邏輯一致
+  // （不能直接拿整個 q 去比對書名，因為 q 這時候含有分隔符號，書名不會剛好長那樣）
   state.booksIndex.forEach((b, idx)=>{
     const normTitle = normalizeText(b.title);
-    if((b.title.includes(q) || normTitle.includes(normQ)) && !bookScores.has(idx) && passesFilters(idx)){
+    const titleMatches = isMultiTerm
+      ? subTerms.every(st => b.title.includes(st) || normTitle.includes(normalizeText(st)))
+      : (b.title.includes(searchQ) || normTitle.includes(normQ));
+    if(titleMatches && !bookScores.has(idx) && passesFilters(idx)){
       bookScores.set(idx, {count:0, terms:new Set(['(書名相符)'])});
     }
   });
@@ -643,6 +725,7 @@ async function runSearch(rawQuery){
   state.loadMore = remainingCount > 0 ? {
     token: myToken,
     q: mainNormQ,
+    isMultiTerm,
     candidates: mainCandidates,
     verifiedCount: mainVerifiedCount,
     bookScores,
@@ -671,7 +754,7 @@ async function loadMoreCandidates(){
   const nextBatch = lm.candidates.slice(lm.verifiedCount, lm.verifiedCount + MAX_CANDIDATE_BOOKS);
   let hits;
   try{
-    hits = await verifyCandidates(lm.q, nextBatch);
+    hits = lm.isMultiTerm ? await verifyAndCandidates(lm.q, nextBatch) : await verifyCandidates(lm.q, nextBatch);
   }catch(err){
     console.error('載入更多典籍時發生錯誤：', err);
     if(btn){ btn.disabled = false; btn.textContent = '載入失敗，點此重試'; }
