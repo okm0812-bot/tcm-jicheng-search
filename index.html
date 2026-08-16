@@ -51,6 +51,7 @@
           spellcheck="false"
           placeholder="例如：消渴、黃芪、大黃蟅蟲丸、傷寒…"
         >
+        <button type="button" id="searchClearBtn" class="search-clear" aria-label="清除搜尋" hidden>✕</button>
         <button type="button" id="searchIconBtn" class="search-icon" aria-label="執行搜尋">尋</button>
         <ul id="autocompleteList" class="autocomplete-list" hidden></ul>
       </div>
@@ -151,7 +152,7 @@
   </div>
 </div>
 
-<div id="loadingToast" class="loading-toast" onclick="this.hidden=true">載入中…（點擊關閉）</div>
+<div id="loadingToast" class="loading-toast" onclick="this.hidden=true" hidden>載入中…（點擊關閉）</div>
 
 <script src="app.js"></script>
 </body>

@@ -188,6 +188,29 @@ body::before{
   color:var(--seal-deep);
   background:rgba(179,58,46,0.08);
 }
+.search-clear{
+  position:absolute;
+  right:60px;
+  top:50%;
+  transform:translateY(-50%);
+  color:var(--ink-faint);
+  background:none;
+  border:none;
+  font-size:0.85rem;
+  padding:6px;
+  min-width:32px;
+  min-height:32px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  border-radius:50%;
+  transition:color .15s, background .15s;
+}
+.search-clear:hover, .search-clear:focus-visible{
+  color:var(--ink);
+  background:rgba(0,0,0,0.06);
+}
 .search-hint{
   margin-top:14px;
   font-size:0.85rem;

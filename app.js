@@ -20,6 +20,7 @@ const state = {
 
 const el = {
   searchInput: document.getElementById('searchInput'),
+  searchClearBtn: document.getElementById('searchClearBtn'),
   searchIconBtn: document.getElementById('searchIconBtn'),
   autocompleteList: document.getElementById('autocompleteList'),
   corpusStats: document.getElementById('corpusStats'),
@@ -74,18 +75,27 @@ function hideLoading(){
 let verifyWorker = null;
 let workerReqCounter = 0;
 const workerPending = new Map();
+const WORKER_TIMEOUT = 60000; // Worker 單次驗證超時（毫秒）
 try{
   if('Worker' in window){
     verifyWorker = new Worker('verify-worker.js');
     verifyWorker.onmessage = (e)=>{
       const msg = e.data;
       if(msg.type === 'verify-result' && workerPending.has(msg.reqId)){
-        workerPending.get(msg.reqId)(msg.hits);
+        const {resolve, timer} = workerPending.get(msg.reqId);
+        clearTimeout(timer);
         workerPending.delete(msg.reqId);
+        resolve(msg.hits);
       }
     };
     verifyWorker.onerror = (err)=>{
       console.warn('驗證 Worker 發生錯誤，之後的驗證將退回主執行緒處理：', err.message);
+      // 關鍵修復：reject 所有等待中的 Promise，避免它們永遠掛住
+      workerPending.forEach(({reject, timer}) => {
+        clearTimeout(timer);
+        reject(new Error('Worker 發生錯誤：' + err.message));
+      });
+      workerPending.clear();
       verifyWorker = null; // 出錯就停用，改走 fallback，避免整站無法搜尋
     };
   }
@@ -109,17 +119,11 @@ async function fetchJSON(path){
 
 // ===== Init =====
 async function init(){
-  console.log('[DEBUG] init() start');
+  showLoading('資料載入中…');
   try{
-    console.log('[DEBUG] fetching books-index.json...');
     const booksIndex = await fetchJSON(`${DATA_BASE}/books-index.json`);
-    console.log('[DEBUG] books-index loaded:', booksIndex.length, 'books');
-    console.log('[DEBUG] fetching disease-map.json...');
     const diseaseMap = await fetchJSON(`${DATA_BASE}/disease-map.json`);
-    console.log('[DEBUG] disease-map loaded:', diseaseMap.length, 'entries');
-    console.log('[DEBUG] fetching char-normalize-map.json...');
     const charNormalizeMap = await fetchJSON(`${DATA_BASE}/char-normalize-map.json`);
-    console.log('[DEBUG] char-normalize-map loaded:', Object.keys(charNormalizeMap).length, 'entries');
 
     state.booksIndex = booksIndex;
     state.diseaseMap = diseaseMap;
@@ -129,18 +133,16 @@ async function init(){
     const totalChars = booksIndex.reduce((s,b)=>s+b.charCount,0);
     el.corpusStats.textContent = `收錄 ${booksIndex.length} 部典籍・約 ${(totalChars/10000).toFixed(0)} 萬字`;
     el.bookCountLanding.textContent = booksIndex.length;
-    console.log('[DEBUG] corpusStats set, bookCountLanding set');
 
     renderCategoryLists();
     renderFilterOptions();
-    console.log('[DEBUG] renderCategoryLists done');
 
     // 把正規化表交給 Worker，之後每次驗證候選典籍時 Worker 才能自行做簡體/異體字比對
     if(verifyWorker) verifyWorker.postMessage({type:'init', charNormalizeMap});
 
     hideLoading();  // FIX: hide toast after init completes successfully
   }catch(err){
-    console.error('[DEBUG] init() ERROR:', err);
+    console.error('init() 發生錯誤：', err);
     hideLoading();
     const msg = '資料載入失敗: ' + err.message;
     el.corpusStats.textContent = msg;
@@ -184,6 +186,9 @@ function browseCategory(cat){
   el.searchInput.value = '';
   state.currentQuery = ''; // 清空上次搜尋詞，避免點進典籍時錯誤標記到不相關的舊搜尋字
   state.loadMore = null;   // 分類瀏覽不是全文檢索，清掉上次搜尋殘留的「顯示更多」狀態
+  // 遞增 token 並取消 Worker 舊請求，避免背景搜尋完成後覆蓋分類瀏覽結果
+  ++state.searchToken;
+  if(verifyWorker) verifyWorker.postMessage({type:'cancel'});
   const dynasties = state.activeFilters.dynasties;
   const books = state.booksIndex.filter(b =>
     (b.category||'').split(/\s+/).includes(cat) &&
@@ -321,7 +326,7 @@ function getBookContent(bookId){
 }
 
 const MAX_CANDIDATE_BOOKS = 90;  // 每一批實際下載驗證的候選典籍數上限（超過的部分不會被丟棄，而是保留給「顯示更多」使用）
-const FETCH_CONCURRENCY = 15;    // 候選典籍平行下載數，加速驗證階段
+const FETCH_CONCURRENCY = 6;     // 候選典籍平行下載數（從 15 降為 6，避免並行請求過多造成網路壅塞）
 
 // 以固定併發數平行處理陣列，避免一次發出過多請求
 async function mapWithConcurrency(items, limit, asyncFn){
@@ -455,9 +460,16 @@ async function verifyCandidates(q, indices){
     const items = indices
       .map(idx => ({idx, bookId: state.booksIndex[idx]?.id}))
       .filter(item => item.bookId);
-    const hits = await new Promise((resolve)=>{
+    const hits = await new Promise((resolve, reject)=>{
       const reqId = ++workerReqCounter;
-      workerPending.set(reqId, resolve);
+      // 超時保護：避免 Worker 永遠不回應造成搜尋無限掛起
+      const timer = setTimeout(()=>{
+        if(workerPending.has(reqId)){
+          workerPending.delete(reqId);
+          reject(new Error('驗證逾時，請稍後重試'));
+        }
+      }, WORKER_TIMEOUT);
+      workerPending.set(reqId, {resolve, reject, timer});
       verifyWorker.postMessage({type:'verify', reqId, q, dataBase: DATA_BASE, items});
     });
     hits.forEach(h=>{
@@ -510,14 +522,17 @@ function buildAutocomplete(query){
   if(!query){ el.autocompleteList.hidden = true; return; }
   if(!state.diseaseMap || !state.booksIndex) return; // 資料尚未載入完成，先不處理，避免報錯
   const q = query.trim();
+  const normQ = normalizeText(q); // 正規化輸入，讓簡體/異體字也能比對
   const results = [];
 
   state.diseaseMap.forEach(entry=>{
-    if(entry.modern.includes(q)){
+    const normModern = normalizeText(entry.modern);
+    if(entry.modern.includes(q) || normModern.includes(normQ)){
       results.push({type:'modern', label: entry.modern, sub: entry.ancient.join('、'), entry});
     }
     entry.ancient.forEach(a=>{
-      if(a.includes(q)){
+      const normA = normalizeText(a);
+      if(a.includes(q) || normA.includes(normQ)){
         results.push({type:'ancient', label: a, sub: `→ ${entry.modern}`, entry});
       }
     });
@@ -525,7 +540,8 @@ function buildAutocomplete(query){
 
   // book title matches
   state.booksIndex.forEach(b=>{
-    if(b.title.includes(q)){
+    const normTitle = normalizeText(b.title);
+    if(b.title.includes(q) || normTitle.includes(normQ)){
       results.push({type:'book', label: b.title, sub: `${b.author||''} ${b.dynasty||''}`, book:b});
     }
   });
@@ -614,6 +630,24 @@ function triggerSearchFromIcon(e){
 el.searchIconBtn.addEventListener('click', triggerSearchFromIcon);
 el.searchIconBtn.addEventListener('touchend', triggerSearchFromIcon, {passive:false});
 
+// 搜尋框清空按鈕：有輸入內容時顯示，點擊後清空並回到首頁
+function updateClearBtnVisibility(){
+  el.searchClearBtn.hidden = el.searchInput.value.length === 0;
+}
+el.searchInput.addEventListener('input', updateClearBtnVisibility);
+el.searchClearBtn.addEventListener('click', ()=>{
+  el.searchInput.value = '';
+  el.searchClearBtn.hidden = true;
+  el.autocompleteList.hidden = true;
+  ++state.searchToken; // 取消任何進行中的搜尋
+  if(verifyWorker) verifyWorker.postMessage({type:'cancel'});
+  state.currentQuery = '';
+  state.loadMore = null;
+  el.resultsArea.hidden = true;
+  el.landingArea.hidden = false;
+  el.searchInput.focus();
+});
+
 // ===== Search =====
 async function runSearch(rawQuery){
   const q = rawQuery.trim();
@@ -625,6 +659,8 @@ async function runSearch(rawQuery){
   }
   // 序號機制：如果使用者又觸發了新的搜尋，這次搜尋跑完後就不再更新畫面
   const myToken = ++state.searchToken;
+  // 取消 Worker 中尚未完成的舊驗證請求，避免新舊搜尋的下載請求互相壅塞
+  if(verifyWorker) verifyWorker.postMessage({type:'cancel'});
 
   // 0. 多詞 AND 偵測：用空格、頓號、逗號分隔多個關鍵字（例如「黃芪 消渴」），
   //    每個詞都必須在同一本書裡出現才算符合，不用是連續片語（不像單詞搜尋要求完全連續）。
@@ -695,6 +731,16 @@ async function runSearch(rawQuery){
     });
   }catch(err){
     console.error('全文搜尋發生錯誤：', err);
+    if(myToken === state.searchToken){
+      el.resultsTitle.textContent = '搜尋發生錯誤';
+      el.resultsCount.textContent = '';
+      el.mappingCard.hidden = true;
+      el.bookResultsList.innerHTML = '';
+      el.noResults.hidden = false;
+      el.noResults.textContent = '搜尋過程發生錯誤（可能是網路逾時），請稍後重試，或嘗試縮小搜尋範圍。';
+      el.landingArea.hidden = true;
+      el.resultsArea.hidden = false;
+    }
   }finally{
     if(myToken === state.searchToken) hideLoading();
   }
@@ -786,10 +832,11 @@ async function loadMoreCandidates(){
     searchTerms: [],
     totalCandidates: lm.candidates.length,
     remainingCount,
+    skipScroll: true, // 顯示更多時不要跳回頂部
   });
 }
 
-function showResults({title, mapping, bookResults, searchTerms, totalCandidates, remainingCount}){
+function showResults({title, mapping, bookResults, searchTerms, totalCandidates, remainingCount, skipScroll}){
   el.landingArea.hidden = true;
   el.resultsArea.hidden = false;
   el.resultsTitle.textContent = title;
@@ -871,7 +918,10 @@ function showResults({title, mapping, bookResults, searchTerms, totalCandidates,
     el.bookResultsList.insertAdjacentElement('afterend', btn);
   }
 
-  window.scrollTo({top: el.resultsArea.offsetTop - 20, behavior:'smooth'});
+  // 「顯示更多」時不要跳回頂部，中斷使用者閱讀位置
+  if(!skipScroll){
+    window.scrollTo({top: el.resultsArea.offsetTop - 20, behavior:'smooth'});
+  }
 }
 
 // ===== Reader =====
