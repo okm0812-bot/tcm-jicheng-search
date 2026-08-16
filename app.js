@@ -29,6 +29,7 @@ const el = {
   mappingCard: document.getElementById('mappingCard'),
   resultsTitle: document.getElementById('resultsTitle'),
   resultsCount: document.getElementById('resultsCount'),
+  extraLoadingNotice: document.getElementById('extraLoadingNotice'),
   bookResultsList: document.getElementById('bookResultsList'),
   noResults: document.getElementById('noResults'),
   categoryList: document.getElementById('categoryList'),
@@ -867,11 +868,16 @@ function showResults({title, mapping, bookResults, searchTerms, totalCandidates,
 
   // 結果數量說明：如果還有候選典籍尚未載入驗證，明確告知使用者還有多少、而不是悄悄隱藏
   // （呼應 jicheng.tw「範圍受限沒關係，但要讓使用者知道」的原則）
-  const extraMsg = extraLoading ? '・正在搜尋更多相關典籍…' : '';
-  if(remainingCount > 0){
-    el.resultsCount.textContent = `已顯示 ${bookResults.length} 部（依相關度排序）・符合關鍵字的候選典籍共 ${totalCandidates} 部，尚有 ${remainingCount} 部未載入${extraMsg}`;
+  if(extraLoading){
+    el.extraLoadingNotice.hidden = false;
+    el.resultsCount.textContent = remainingCount > 0
+      ? `已顯示 ${bookResults.length} 部（依相關度排序）・符合關鍵字的候選典籍共 ${totalCandidates} 部，尚有 ${remainingCount} 部未載入`
+      : (bookResults.length ? `共 ${bookResults.length} 部典籍` : '');
   } else {
-    el.resultsCount.textContent = bookResults.length ? `共 ${bookResults.length} 部典籍${extraMsg}` : extraMsg;
+    el.extraLoadingNotice.hidden = true;
+    el.resultsCount.textContent = remainingCount > 0
+      ? `已顯示 ${bookResults.length} 部（依相關度排序）・符合關鍵字的候選典籍共 ${totalCandidates} 部，尚有 ${remainingCount} 部未載入`
+      : (bookResults.length ? `共 ${bookResults.length} 部典籍` : '');
   }
 
   if(mapping && mapping.length){

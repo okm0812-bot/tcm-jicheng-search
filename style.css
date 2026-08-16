@@ -434,6 +434,30 @@ body::before{
   color:var(--indigo-deep);
 }
 .results-count{font-size:0.8rem;color:var(--ink-faint);}
+.extra-loading-notice{
+  margin-top:10px;
+  padding:10px 16px;
+  background:#fef2f2;
+  border:1px solid #fca5a5;
+  border-left:4px solid #dc2626;
+  border-radius:6px;
+  color:#dc2626;
+  font-size:0.95rem;
+  font-weight:600;
+  line-height:1.6;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.extra-loading-icon{
+  display:inline-block;
+  animation:extra-loading-spin 1.2s linear infinite;
+  font-size:1.1rem;
+}
+@keyframes extra-loading-spin{
+  from{transform:rotate(0deg);}
+  to{transform:rotate(360deg);}
+}
 
 .book-results-list{list-style:none;margin:0;padding:0;}
 .book-result{
