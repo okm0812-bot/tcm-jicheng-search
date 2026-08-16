@@ -533,6 +533,45 @@ body::before{
   border-top:1px solid var(--hairline);
   position:relative;z-index:1;
 }
+.footer-notice{
+  max-width:720px;
+  margin:0 auto;
+  text-align:left;
+}
+.footer-notice h4{
+  margin:0 0 8px;
+  font-family:var(--sans);
+  font-size:0.8rem;
+  font-weight:700;
+  color:var(--ink-soft);
+  text-align:center;
+}
+.footer-notice p{
+  margin:0 0 10px;
+  line-height:1.7;
+}
+.footer-notice p:last-child{margin-bottom:0;}
+.footer-notice a{color:var(--seal); text-decoration:underline;}
+.footer-notice a:hover{color:var(--seal-deep);}
+
+/* ===== 頂端著作權/資料來源聲明 ===== */
+.top-notice{
+  background:var(--paper-deep);
+  border-bottom:1px solid var(--hairline);
+  padding:8px 16px;
+  position:relative;z-index:1;
+}
+.top-notice p{
+  max-width:960px;
+  margin:0 auto;
+  font-family:var(--sans);
+  font-size:0.72rem;
+  line-height:1.6;
+  color:var(--ink-soft);
+  text-align:center;
+}
+.top-notice a{color:var(--seal); text-decoration:underline;}
+.top-notice a:hover{color:var(--seal-deep);}
 
 /* ===== Reader overlay ===== */
 .reader-overlay{

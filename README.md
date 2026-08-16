@@ -93,3 +93,11 @@ git push
 - **重新產生全文索引**：若日後要更新典籍資料本身，`data/books/` 與 `data/term-index.json` 是由原始 .7z 檔案透過 Python 腳本自動產生的（腳本邏輯：解析 DokuWiki 格式標記、擷取 `<book>` 中繼資料、掃描病證詞彙建立索引）。若你需要，我可以之後幫你把產生腳本一併整理進repo（例如 `scripts/build_data.py`），方便未來更新典籍時重新產生。
 
 - **免責聲明**：頁面下方已加註「古今病名對照僅供臨床參考與文獻檢索輔助」的提醒，建議正式對外使用前，可請中醫師審閱 `disease-map.json` 的對照內容是否恰當。
+
+## 著作權與資料來源聲明
+
+本系統所索引與提供檢索之古籍典籍文本，來源均為 [中醫笈成（jicheng.tw）](https://jicheng.tw/)。
+
+依 [jicheng.tw 著作權聲明](https://jicheng.tw/tcm/copyright.html)，其對公眾領域典籍文本之篩選、編排、標點、附註等一切編輯，均以 [CC0 1.0 公眾領域貢獻宣告](https://creativecommons.org/publicdomain/zero/1.0/deed.zh_TW) 釋出；該站自行創作之文本（如介紹、協助頁面），則以 [創用CC 姓名標示 4.0 國際版（CC BY 4.0）](https://creativecommons.org/licenses/by/4.0/deed.zh_TW) 授權釋出。本系統依循上述授權條款使用並呈現該站資料，網頁上端與頁尾皆已加註對應聲明與連結。
+
+本系統開發者僅提供搜尋介面與技術服務，不對「中醫笈成」之資料主張任何專屬著作權，亦不儲存任何使用者查詢紀錄。本站內容僅供學術研究與典籍檢索參考，不構成醫療診斷、用藥或治療建議，實際醫療行為請諮詢合格中醫師。
