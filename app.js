@@ -75,7 +75,7 @@ function hideLoading(){
 let verifyWorker = null;
 let workerReqCounter = 0;
 const workerPending = new Map();
-const WORKER_TIMEOUT = 60000; // Worker 單次驗證超時（毫秒）
+const WORKER_TIMEOUT = 120000; // Worker 單次驗證超時（毫秒）
 try{
   if('Worker' in window){
     verifyWorker = new Worker('verify-worker.js');
@@ -712,23 +712,88 @@ async function runSearch(rawQuery){
     const firstBatch = mainCandidates.slice(0, MAX_CANDIDATE_BOOKS);
     mainVerifiedCount = firstBatch.length;
 
-    // 主查詢詞的驗證 + 病名對照延伸詞的完整搜尋，平行處理，避免依序等待造成長時間卡住
-    const [mainHits, ...extraHits] = await Promise.all([
-      isMultiTerm ? verifyAndCandidates(mainNormQ, firstBatch) : verifyCandidates(mainNormQ, firstBatch),
-      ...extraTerms.map(term => fullTextSearchTerm(term)),
-    ]);
+    // 主查詢詞先驗證，完成後「立即顯示」結果，不等待延伸詞
+    const mainHits = isMultiTerm
+      ? await verifyAndCandidates(mainNormQ, firstBatch)
+      : await verifyCandidates(mainNormQ, firstBatch);
 
-    if(myToken !== state.searchToken) return; // 已經有更新的搜尋在跑，這次結果直接丟棄
+    if(myToken !== state.searchToken) return;
 
-    [mainHits, ...extraHits].forEach(hits=>{
-      hits.forEach((rec, idx)=>{
-        if(!passesFilters(idx)) return; // 延伸詞的候選也要套用同一套篩選，避免結果不一致
-        const cur = bookScores.get(idx) || {count:0, terms:new Set()};
-        cur.count += rec.count;
-        rec.rawMatches.forEach(t => cur.terms.add(t));
-        bookScores.set(idx, cur);
-      });
+    // 先把主查詢結果合併進去
+    mainHits.forEach((rec, idx)=>{
+      if(!passesFilters(idx)) return;
+      const cur = bookScores.get(idx) || {count:0, terms:new Set()};
+      cur.count += rec.count;
+      rec.rawMatches.forEach(t => cur.terms.add(t));
+      bookScores.set(idx, cur);
     });
+
+    // 也納入書名直接相符的典籍
+    state.booksIndex.forEach((b, idx)=>{
+      const normTitle = normalizeText(b.title);
+      const titleMatches = isMultiTerm
+        ? subTerms.every(st => b.title.includes(st) || normTitle.includes(normalizeText(st)))
+        : (b.title.includes(searchQ) || normTitle.includes(normQ));
+      if(titleMatches && !bookScores.has(idx) && passesFilters(idx)){
+        bookScores.set(idx, {count:0, terms:new Set(['(書名相符)'])});
+      }
+    });
+
+    const remainingCount = Math.max(0, mainCandidates.length - mainVerifiedCount);
+    state.loadMore = remainingCount > 0 ? {
+      token: myToken, q: mainNormQ, isMultiTerm,
+      candidates: mainCandidates, verifiedCount: mainVerifiedCount,
+      bookScores, mappingMatches, resultsTitle: `「${q}」相關典籍`,
+    } : null;
+
+    function buildBookResults(){
+      return [...bookScores.entries()]
+        .map(([idx, rec])=>({book: state.booksIndex[idx], count: rec.count, terms:[...rec.terms]}))
+        .filter(r=>r.book)
+        .sort((a,b)=> b.count - a.count);
+    }
+
+    // 立即顯示主查詢結果
+    let extraDone = 0;
+    const extraTotal = extraTerms.length;
+    showResults({
+      title: `「${q}」相關典籍`,
+      mapping: mappingMatches.length ? mappingMatches : null,
+      bookResults: buildBookResults(),
+      searchTerms: [...searchTerms],
+      totalCandidates: mainCandidates.length,
+      remainingCount,
+      extraLoading: extraTotal > 0,
+    });
+    hideLoading();
+
+    // 延伸詞循序執行，每完成一個就重新渲染（漸進式顯示）
+    for(const term of extraTerms){
+      try {
+        const hits = await fullTextSearchTerm(term);
+        if(myToken !== state.searchToken) return;
+        hits.forEach((rec, idx)=>{
+          if(!passesFilters(idx)) return;
+          const cur = bookScores.get(idx) || {count:0, terms:new Set()};
+          cur.count += rec.count;
+          rec.rawMatches.forEach(t => cur.terms.add(t));
+          bookScores.set(idx, cur);
+        });
+      } catch(err) {
+        console.warn('延伸詞搜尋失敗：', term, err);
+      }
+      extraDone++;
+      if(myToken !== state.searchToken) return;
+      showResults({
+        title: `「${q}」相關典籍`,
+        mapping: mappingMatches.length ? mappingMatches : null,
+        bookResults: buildBookResults(),
+        searchTerms: [...searchTerms],
+        totalCandidates: mainCandidates.length,
+        remainingCount,
+        extraLoading: extraDone < extraTotal,
+      });
+    }
   }catch(err){
     console.error('全文搜尋發生錯誤：', err);
     if(myToken === state.searchToken){
@@ -745,48 +810,7 @@ async function runSearch(rawQuery){
     if(myToken === state.searchToken) hideLoading();
   }
 
-  if(myToken !== state.searchToken) return;
-
-  // 也納入書名直接相符的典籍（含正規化比對，處理簡體/異體字輸入書名的情況）
-  // 多詞模式下，書名要「同時」包含每個子詞才算相符，跟全文檢索的 AND 邏輯一致
-  // （不能直接拿整個 q 去比對書名，因為 q 這時候含有分隔符號，書名不會剛好長那樣）
-  state.booksIndex.forEach((b, idx)=>{
-    const normTitle = normalizeText(b.title);
-    const titleMatches = isMultiTerm
-      ? subTerms.every(st => b.title.includes(st) || normTitle.includes(normalizeText(st)))
-      : (b.title.includes(searchQ) || normTitle.includes(normQ));
-    if(titleMatches && !bookScores.has(idx) && passesFilters(idx)){
-      bookScores.set(idx, {count:0, terms:new Set(['(書名相符)'])});
-    }
-  });
-
-  const bookResults = [...bookScores.entries()]
-    .map(([idx, rec])=>({book: state.booksIndex[idx], count: rec.count, terms:[...rec.terms]}))
-    .filter(r=>r.book)
-    .sort((a,b)=> b.count - a.count);
-
-  const remainingCount = Math.max(0, mainCandidates.length - mainVerifiedCount);
-
-  // 保留「尚未驗證的候選」與目前累積的分數，供「顯示更多」按鈕使用
-  state.loadMore = remainingCount > 0 ? {
-    token: myToken,
-    q: mainNormQ,
-    isMultiTerm,
-    candidates: mainCandidates,
-    verifiedCount: mainVerifiedCount,
-    bookScores,
-    mappingMatches,
-    resultsTitle: `「${q}」相關典籍`,
-  } : null;
-
-  showResults({
-    title: `「${q}」相關典籍`,
-    mapping: mappingMatches.length ? mappingMatches : null,
-    bookResults,
-    searchTerms: [...searchTerms],
-    totalCandidates: mainCandidates.length,
-    remainingCount,
-  });
+  // 結果已在上方漸進式顯示
 }
 
 // 「顯示更多典籍」：驗證下一批先前保留的候選典籍，把結果併入目前的搜尋結果
@@ -836,17 +860,18 @@ async function loadMoreCandidates(){
   });
 }
 
-function showResults({title, mapping, bookResults, searchTerms, totalCandidates, remainingCount, skipScroll}){
+function showResults({title, mapping, bookResults, searchTerms, totalCandidates, remainingCount, skipScroll, extraLoading}){
   el.landingArea.hidden = true;
   el.resultsArea.hidden = false;
   el.resultsTitle.textContent = title;
 
   // 結果數量說明：如果還有候選典籍尚未載入驗證，明確告知使用者還有多少、而不是悄悄隱藏
   // （呼應 jicheng.tw「範圍受限沒關係，但要讓使用者知道」的原則）
+  const extraMsg = extraLoading ? '・正在搜尋更多相關典籍…' : '';
   if(remainingCount > 0){
-    el.resultsCount.textContent = `已顯示 ${bookResults.length} 部（依相關度排序）・符合關鍵字的候選典籍共 ${totalCandidates} 部，尚有 ${remainingCount} 部未載入`;
+    el.resultsCount.textContent = `已顯示 ${bookResults.length} 部（依相關度排序）・符合關鍵字的候選典籍共 ${totalCandidates} 部，尚有 ${remainingCount} 部未載入${extraMsg}`;
   } else {
-    el.resultsCount.textContent = bookResults.length ? `共 ${bookResults.length} 部典籍` : '';
+    el.resultsCount.textContent = bookResults.length ? `共 ${bookResults.length} 部典籍${extraMsg}` : extraMsg;
   }
 
   if(mapping && mapping.length){
