@@ -497,12 +497,28 @@ function renderAutocomplete(){
 }
 
 let autocompleteDebounceTimer = null;
+let isComposing = false; // 中文輸入法（注音/拼音等）是否正在組字中
+
+el.searchInput.addEventListener('compositionstart', ()=>{ isComposing = true; });
+el.searchInput.addEventListener('compositionend', ()=>{
+  isComposing = false;
+  // 組字剛結束時，input 事件在部分瀏覽器/輸入法下可能已經先發生過（值還是組字中的狀態），
+  // 這裡在組字真正結束的當下再觸發一次，確保自動完成拿到的是完整的中文字
+  clearTimeout(autocompleteDebounceTimer);
+  autocompleteDebounceTimer = setTimeout(()=> buildAutocomplete(el.searchInput.value), 0);
+});
+
 el.searchInput.addEventListener('input', ()=>{
+  if(isComposing) return; // 組字過程中的中間狀態（例如注音符號、拼音字母）不觸發自動完成，避免顯示無意義的建議
   clearTimeout(autocompleteDebounceTimer);
   autocompleteDebounceTimer = setTimeout(()=> buildAutocomplete(el.searchInput.value), 120);
 });
 
 el.searchInput.addEventListener('keydown', (e)=>{
+  // 輸入法組字中按下 Enter，通常是用來「確認選字」，不是使用者要送出搜尋——
+  // 有些瀏覽器/輸入法組合下 e.isComposing 判斷不完全可靠，e.keyCode === 229 是常見的相容判斷方式
+  if(e.isComposing || e.keyCode === 229) return;
+
   if(el.autocompleteList.hidden === false){
     if(e.key === 'ArrowDown'){ e.preventDefault(); acActiveIndex = Math.min(acActiveIndex+1, acItems.length-1); renderAutocomplete(); return; }
     if(e.key === 'ArrowUp'){ e.preventDefault(); acActiveIndex = Math.max(acActiveIndex-1, 0); renderAutocomplete(); return; }
