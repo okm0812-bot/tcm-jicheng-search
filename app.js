@@ -58,12 +58,16 @@ let loadingSafetyTimer = null;
 function showLoading(msg){
   el.loadingToast.textContent = msg || '載入中…';
   el.loadingToast.hidden = false;
-  // 每次顯示載入提示都重新設定保護計時器，避免任何一次操作卡住時提示永遠不消失
+  // 這個計時器只是「萬一真的死鎖」的最後防線，不是搜尋的正常時間上限——
+  // 正常情況下 Worker 的逾時／完成／取消訊號一定會先觸發，讓 hideLoading()
+  // 提早被呼叫。原本固定 15 秒就強制隱藏，會在搜尋（尤其是延伸詞還在跑、
+  // Worker 逾時上限已經拉到 260 秒的情況下）明明還在正常進行時，讓使用者
+  // 誤以為網站當掉了。
   if(loadingSafetyTimer) clearTimeout(loadingSafetyTimer);
   loadingSafetyTimer = setTimeout(()=>{
-    console.warn('載入提示逾時，自動隱藏');
+    console.warn('載入提示長時間未結束（可能真的卡住了），自動隱藏');
     el.loadingToast.hidden = true;
-  }, 15000);
+  }, 280000);
 }
 function hideLoading(){
   el.loadingToast.hidden = true;
@@ -76,12 +80,27 @@ function hideLoading(){
 let verifyWorker = null;
 let workerReqCounter = 0;
 const workerPending = new Map();
-const WORKER_TIMEOUT = 120000; // Worker 單次驗證超時（毫秒）
+// 這是「Worker 完全沒回應」的最後防線，不是正常搜尋的時間上限。Worker 本身
+// 已經有：單本典籍 30 秒逾時 + 佇列化處理，一批 50 本、併發 6 的最壞情況
+// （全部逾時）大約需要 ceil(50/6)×30秒 ≈ 250 秒；這裡抓寬一點（260 秒），
+// 避免在 Worker 明明還在正常工作時，App 端就先誤判逾時、丟棄還沒回來的結果。
+// （原本 120 秒在極端情況下可能還是偏緊，尤其現在延伸詞改成循序執行，
+// 每個延伸詞各自獨立計時，不會因為疊加而互相拖累，可以放心抓寬。）
+const WORKER_TIMEOUT = 260000;
 try{
   if('Worker' in window){
     verifyWorker = new Worker('verify-worker.js');
     verifyWorker.onmessage = (e)=>{
       const msg = e.data;
+      if(msg.type === 'verify-progress'){
+        const pending = workerPending.get(msg.reqId);
+        // 只有這則進度訊息屬於「目前這次搜尋」時才更新畫面文字，
+        // 避免使用者已經開始新搜尋、卻看到上一次搜尋的進度數字
+        if(pending && pending.token === state.searchToken){
+          showLoading(`搜尋典籍全文中…（${msg.done}/${msg.total}）`);
+        }
+        return;
+      }
       if(msg.type === 'verify-result' && workerPending.has(msg.reqId)){
         const {resolve, timer} = workerPending.get(msg.reqId);
         clearTimeout(timer);
@@ -326,7 +345,7 @@ function getBookContent(bookId){
   return promise;
 }
 
-const MAX_CANDIDATE_BOOKS = 90;  // 每一批實際下載驗證的候選典籍數上限（超過的部分不會被丟棄，而是保留給「顯示更多」使用）
+const MAX_CANDIDATE_BOOKS = 50;  // 每一批實際下載驗證的候選典籍數上限（只是「第一批」大小，不是結果上限；超過的部分保留給「顯示更多」）
 const FETCH_CONCURRENCY = 6;     // 候選典籍平行下載數（從 15 降為 6，避免並行請求過多造成網路壅塞）
 
 // 以固定併發數平行處理陣列，避免一次發出過多請求
@@ -470,7 +489,7 @@ async function verifyCandidates(q, indices){
           reject(new Error('驗證逾時，請稍後重試'));
         }
       }, WORKER_TIMEOUT);
-      workerPending.set(reqId, {resolve, reject, timer});
+      workerPending.set(reqId, {resolve, reject, timer, token: state.searchToken});
       verifyWorker.postMessage({type:'verify', reqId, q, dataBase: DATA_BASE, items});
     });
     hits.forEach(h=>{
@@ -793,6 +812,7 @@ async function runSearch(rawQuery){
         totalCandidates: mainCandidates.length,
         remainingCount,
         extraLoading: extraDone < extraTotal,
+        skipScroll: true, // 延伸詞陸續補上時只更新內容，不要每次都把畫面捲回結果區頂端
       });
     }
   }catch(err){
