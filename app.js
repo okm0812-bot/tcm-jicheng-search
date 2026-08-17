@@ -963,8 +963,8 @@ function showResults({title, mapping, bookResults, searchTerms, totalCandidates,
     const btn = document.createElement('button');
     btn.id = 'loadMoreCandidatesBtn';
     btn.type = 'button';
-    btn.textContent = `顯示更多典籍（還有 ${remainingCount} 部候選未檢查，依相關度排序）`;
-    btn.style.cssText = 'display:block;margin:16px auto 0;padding:10px 20px;cursor:pointer;';
+    btn.className = 'load-more-btn';
+    btn.textContent = `顯示更多典籍（還有 ${remainingCount} 部候選未檢查，依相關度排序）請點選顯示`;
     btn.addEventListener('click', loadMoreCandidates);
     el.bookResultsList.insertAdjacentElement('afterend', btn);
   }

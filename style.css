@@ -308,16 +308,28 @@ body::before{
 }
 .filter-panel > button:hover{color:var(--seal); border-color:var(--seal);}
 
-#loadMoreCandidatesBtn{
+.load-more-btn{
+  display:block;
+  margin:24px auto 0;
+  padding:14px 28px;
   font-family:var(--sans);
-  font-size:0.85rem;
-  color:var(--ink-soft);
-  background:var(--paper-card);
-  border:1px solid var(--hairline);
-  border-radius:2px;
+  font-size:1.05rem;
+  font-weight:700;
+  color:var(--paper-card);
+  background:var(--seal);
+  border:1.5px solid var(--seal-deep);
+  border-radius:3px;
+  cursor:pointer;
+  letter-spacing:0.02em;
+  box-shadow:0 4px 14px rgba(179,58,46,0.28);
+  transition:background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
-#loadMoreCandidatesBtn:hover{color:var(--seal); border-color:var(--seal);}
-#loadMoreCandidatesBtn:disabled{opacity:0.6; cursor:default;}
+.load-more-btn:hover{
+  background:var(--seal-deep);
+  transform:translateY(-1px);
+  box-shadow:0 6px 18px rgba(179,58,46,0.35);
+}
+.load-more-btn:disabled{opacity:0.6; cursor:default; transform:none; box-shadow:none;}
 
 .autocomplete-list{
   position:absolute;
