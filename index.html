@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>岐黃尋・中醫典籍全文檢索</title>
 <meta name="description" content="中醫典籍全文檢索，病名、藥名、方劑、關鍵字皆可搜尋，古今病名智慧對照">
+<script>
+(function () {
+  // 偵測 LINE 內建瀏覽器（WebView）。LINE 的 UA 通常含 "Line/版本號"。
+  // 加上 line-inapp class 後，style.css 裡對應規則才會生效；
+  // 一般瀏覽器（Chrome／Safari 等）不會有這個 class，版面完全不受影響。
+  if (/\bLine\//i.test(navigator.userAgent || '')) {
+    document.documentElement.classList.add('line-inapp');
+  }
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap"></noscript>
