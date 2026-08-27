@@ -772,3 +772,52 @@ body::before{
   .header-inner{padding:14px 16px;}
   .brand-text h1{font-size:1.2rem;}
 }
+
+/* ===== LINE 內建瀏覽器（WebView）修正，僅在 .line-inapp 生效 =====
+   問題根源：LINE WebView 常回報不準確的排版寬度，且對長書名折行處理較差，
+   導致 .book-result-top / .reader-body / .reader-header 這些沒設 min-width:0
+   的 flex/grid 欄位被撐開、把內容欄擠窄。一般瀏覽器沒有 .line-inapp class，
+   以下規則完全不會套用，版面維持原樣。 */
+
+.line-inapp{
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* 結果卡片：書名 + 符合次數，避免長書名把次數擠出去 */
+.line-inapp .book-result-top{
+  flex-wrap: wrap;
+}
+.line-inapp .book-result-title{
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 結果區主欄／側欄：不依賴量測寬度（LINE 常回報不準），強制單欄 */
+.line-inapp .results-columns{
+  grid-template-columns: 1fr;
+}
+
+/* 閱讀器標題：書名允許斷行，避免撐開右側控制項 */
+.line-inapp .reader-header{
+  flex-wrap: wrap;
+}
+.line-inapp .reader-header-text{
+  min-width: 0;
+}
+.line-inapp .reader-header-text h2{
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 閱讀器左右欄：同樣不依賴量測寬度，強制單欄，篇名清單改為上方可捲動橫列 */
+.line-inapp .reader-body{
+  grid-template-columns: 1fr;
+}
+.line-inapp .chapter-nav{
+  display: block; /* 蓋掉原本 680px media query 才會加上的 display:none */
+  border-right: none;
+  border-bottom: 1px solid var(--hairline);
+  max-height: 32vh;
+}
