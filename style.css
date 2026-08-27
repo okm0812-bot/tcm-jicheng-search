@@ -811,13 +811,25 @@ body::before{
   word-break: break-word;
 }
 
-/* 閱讀器左右欄：同樣不依賴量測寬度，強制單欄，篇名清單改為上方可捲動橫列 */
+/* 閱讀器左右欄：篇名（章節）欄固定縮到 20%，內文欄拿到 80%，
+   不依賴量測寬度（LINE 常回報不準），也不再整個堆疊成單欄 */
 .line-inapp .reader-body{
-  grid-template-columns: 1fr;
+  grid-template-columns: 20% 80%; /* 蓋掉原本 680px media query 才會加上的 grid-template-columns:1fr */
 }
 .line-inapp .chapter-nav{
   display: block; /* 蓋掉原本 680px media query 才會加上的 display:none */
-  border-right: none;
-  border-bottom: 1px solid var(--hairline);
-  max-height: 32vh;
+  border-right: 1px solid var(--hairline);
+  border-bottom: none;
+  max-height: none;
+  padding: 10px 0;
+}
+.line-inapp .chapter-nav-item{
+  padding: 8px 6px;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.line-inapp .chapter-content{
+  padding: 20px 14px;
 }
