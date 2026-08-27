@@ -833,3 +833,15 @@ body::before{
 .line-inapp .chapter-content{
   padding: 20px 14px;
 }
+
+/* 閱讀器面板：LINE 內直接撐滿整個畫面，取消置中卡片與邊距 */
+.line-inapp .reader-overlay{
+  padding: 0;
+}
+.line-inapp .reader-panel{
+  max-width: none;
+  max-height: none;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+}
